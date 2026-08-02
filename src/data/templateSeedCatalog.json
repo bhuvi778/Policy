@@ -1,0 +1,269 @@
+{
+  "templateGroups": [
+    {
+      "sectionKey": "reels",
+      "section": "Reels & Videos",
+      "category": "Greetings",
+      "subcategory": "General",
+      "type": "Reel",
+      "tags": ["reel", "video", "reels"],
+      "items": [
+        {
+          "title": "Policy Update Reel",
+          "description": "Short reel for daily advisory updates.",
+          "fileUrl": "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+        },
+        {
+          "title": "Client Reminder Reel",
+          "description": "Simple reminder style reel template.",
+          "fileUrl": "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4"
+        },
+        {
+          "title": "Insurance Awareness Reel",
+          "description": "Quick awareness short-form reel content.",
+          "fileUrl": "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4"
+        }
+      ]
+    },
+    {
+      "sectionKey": "stories",
+      "section": "Stories",
+      "category": "Greetings",
+      "subcategory": "General",
+      "type": "Story",
+      "tags": ["story", "stories", "storys"],
+      "items": [
+    {
+      "title": "Client Success Story",
+      "description": "Simple client success visual story.",
+      "fileUrl": "https://storage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4"
+    },
+    {
+      "title": "Policy Milestone Story",
+      "description": "Use as story format campaign post.",
+      "fileUrl": "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4"
+    },
+    {
+      "title": "Trust Build Story",
+      "description": "Client journey storytelling format.",
+      "fileUrl": "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4"
+    }
+  ]
+},
+    {
+      "sectionKey": "dailyMotivation",
+      "section": "Daily Motivation",
+      "category": "Knowledge",
+      "subcategory": "Motivation",
+      "type": "Image",
+      "tags": ["motivation", "daily"],
+      "items": [
+        {
+          "title": "Learn From Mistakes",
+          "description": "A person who never made a mistake never tried anything new",
+          "fileUrl": "https://picsum.photos/seed/policy-motivation-01/900/900"
+        },
+        {
+          "title": "Positive Attitude",
+          "description": "You will never find a strong person with an easy past",
+          "fileUrl": "https://picsum.photos/seed/policy-motivation-02/900/900"
+        },
+        {
+          "title": "Never Give Up",
+          "description": "Success is the sum of small efforts repeated every day",
+          "fileUrl": "https://picsum.photos/seed/policy-motivation-03/900/900"
+        }
+      ]
+    },
+    {
+      "sectionKey": "birthday",
+      "section": "Birthday Cards",
+      "category": "Greetings",
+      "subcategory": "Birthday",
+      "type": "Image",
+      "tags": ["birthday", "birthday wishes"],
+      "items": [
+        {
+          "title": "Birthday Wishes Card",
+          "description": "Ready-to-send birthday card with clean layout.",
+          "fileUrl": "https://picsum.photos/seed/policy-bday-01/900/900"
+        },
+        {
+          "title": "Happy Birthday Frame",
+          "description": "Elegant birthday frame style template.",
+          "fileUrl": "https://picsum.photos/seed/policy-bday-02/900/900"
+        },
+        {
+          "title": "Belated Birthday Message",
+          "description": "Template for late birthday greetings.",
+          "fileUrl": "https://picsum.photos/seed/policy-bday-03/900/900"
+        }
+      ]
+    },
+    {
+      "sectionKey": "anniversary",
+      "section": "Anniversary Cards",
+      "category": "Greetings",
+      "subcategory": "Anniversary",
+      "type": "Image",
+      "tags": ["anniversary", "wedding"],
+      "items": [
+        {
+          "title": "Anniversary Wishes",
+          "description": "Elegant anniversary message card.",
+          "fileUrl": "https://picsum.photos/seed/policy-ann-01/900/900"
+        },
+        {
+          "title": "25 Years Silver Anniversary",
+          "description": "Golden style anniversary template.",
+          "fileUrl": "https://picsum.photos/seed/policy-ann-02/900/900"
+        },
+        {
+          "title": "Golden Wedding Anniversary",
+          "description": "Premium style anniversary frame.",
+          "fileUrl": "https://picsum.photos/seed/policy-ann-03/900/900"
+        }
+      ]
+    },
+    {
+      "sectionKey": "festival",
+      "section": "Festival Cards",
+      "category": "Greetings",
+      "subcategory": "Festival",
+      "type": "Image",
+      "tags": ["special days", "monthly", "festival", "greeting"],
+      "items": [
+        {
+          "title": "Monthly Motivation Day",
+          "description": "Monthly special-day card for client engagement.",
+          "fileUrl": "https://picsum.photos/seed/policy-month-01/900/900"
+        },
+        {
+          "title": "Monthly Reminder",
+          "description": "Reminder card for periodic campaigns.",
+          "fileUrl": "https://picsum.photos/seed/policy-month-02/900/900"
+        },
+        {
+          "title": "Monthly Blessings",
+          "description": "Calendar-style greeting card.",
+          "fileUrl": "https://picsum.photos/seed/policy-month-03/900/900"
+        }
+      ]
+    },
+    {
+      "sectionKey": "specialDays",
+      "section": "Monthly Days",
+      "category": "Greetings",
+      "subcategory": "Festival",
+      "type": "Image",
+      "tags": ["special days", "monthly", "monthly days"],
+      "items": [
+        {
+          "title": "Monthly Motivation Day",
+          "description": "Monthly special-day card for client engagement.",
+          "fileUrl": "https://picsum.photos/seed/policy-month-01/900/900"
+        },
+        {
+          "title": "Monthly Reminder",
+          "description": "Reminder card for periodic campaigns.",
+          "fileUrl": "https://picsum.photos/seed/policy-month-02/900/900"
+        },
+        {
+          "title": "Monthly Blessings",
+          "description": "Calendar-style greeting card.",
+          "fileUrl": "https://picsum.photos/seed/policy-month-03/900/900"
+        }
+      ]
+    },
+    {
+      "sectionKey": "knowledge",
+      "section": "Knowledge Centre",
+      "category": "Knowledge",
+      "subcategory": "Insurance Education",
+      "type": "Article",
+      "tags": ["knowledge", "education"],
+      "items": [
+        {
+          "title": "Insurance Basics",
+          "description": "Quick insurance basics and explanation.",
+          "fileUrl": "https://picsum.photos/seed/knowledge-01/900/900"
+        },
+        {
+          "title": "Term vs Whole Life",
+          "description": "Simple comparison for client discussions.",
+          "fileUrl": "https://picsum.photos/seed/knowledge-02/900/900"
+        }
+      ]
+    },
+    {
+      "sectionKey": "news",
+      "section": "News & Articles",
+      "category": "News",
+      "subcategory": "Market Updates",
+      "type": "Article",
+      "tags": ["news", "article", "updates"],
+      "items": [
+        {
+          "title": "Daily Market Update",
+          "description": "Useable market summary card.",
+          "fileUrl": "https://picsum.photos/seed/news-01/900/900"
+        },
+        {
+          "title": "Finance Headlines",
+          "description": "Simple finance news style template.",
+          "fileUrl": "https://picsum.photos/seed/news-02/900/900"
+        }
+      ]
+    },
+    {
+      "sectionKey": "licplans",
+      "section": "LIC Plans",
+      "category": "LIC",
+      "subcategory": "Plans",
+      "type": "Template",
+      "tags": ["lic", "insurance", "plans"],
+      "items": [
+        {
+          "title": "Life Insurance 360",
+          "description": "Life cover awareness card.",
+          "fileUrl": "https://picsum.photos/seed/lic-01/900/900"
+        },
+        {
+          "title": "ULIP Explanation",
+          "description": "ULIP awareness post with visuals.",
+          "fileUrl": "https://picsum.photos/seed/lic-02/900/900"
+        },
+        {
+          "title": "Term Insurance Benefits",
+          "description": "Term plan benefits in simple points.",
+          "fileUrl": "https://picsum.photos/seed/lic-03/900/900"
+        }
+      ]
+    },
+    {
+      "sectionKey": "digitalCards",
+      "section": "Digital Cards",
+      "category": "Digital Assets",
+      "subcategory": "Profile",
+      "type": "DigitalCard",
+      "tags": ["digital", "card"],
+      "items": [
+        {
+          "title": "Digital ID Card",
+          "description": "Professional advisor card for contact sharing.",
+          "fileUrl": "https://picsum.photos/seed/digital-card-01/900/900"
+        },
+        {
+          "title": "NFC Sharing Card",
+          "description": "QR + profile ready template.",
+          "fileUrl": "https://picsum.photos/seed/digital-card-02/900/900"
+        },
+        {
+          "title": "Business Profile Card",
+          "description": "Simple lead-generation card design.",
+          "fileUrl": "https://picsum.photos/seed/digital-card-03/900/900"
+        }
+      ]
+    }
+  ]
+}
