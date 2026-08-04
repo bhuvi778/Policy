@@ -2,8 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Platform, requireNativeComponent, StyleSheet, Text, View } from 'react-native';
 import { Colors } from '../theme/colors';
 
-const AndroidVideoView =
-  Platform.OS === 'android' ? requireNativeComponent('PolicyBhandarVideoView') : null;
+const NativeVideoView =
+  Platform.OS === 'android' || Platform.OS === 'ios'
+    ? requireNativeComponent('PolicyBhandarVideoView')
+    : null;
 
 const NativeVideoPlayer = ({ source, style, thumbnailMode = false }) => {
   const [loading, setLoading] = useState(!!source && !thumbnailMode);
@@ -22,17 +24,17 @@ const NativeVideoPlayer = ({ source, style, thumbnailMode = false }) => {
     );
   }
 
-  if (Platform.OS !== 'android' || !AndroidVideoView) {
+  if (!NativeVideoView) {
     return (
       <View style={[styles.fallback, style]}>
-        <Text style={styles.fallbackText}>Video playback is available on Android.</Text>
+        <Text style={styles.fallbackText}>Video playback is not available in this build.</Text>
       </View>
     );
   }
 
   return (
     <View style={[styles.wrapper, style]}>
-      <AndroidVideoView
+      <NativeVideoView
         thumbnailMode={thumbnailMode}
         source={source}
         style={StyleSheet.absoluteFill}
