@@ -124,12 +124,18 @@ const isMissingEndpointError = (error) => {
     error?.message ||
     ''
   ).toLowerCase();
+  const hasStructuredApiError =
+    error?.data &&
+    typeof error.data === 'object' &&
+    !Array.isArray(error.data);
 
   return (
-    status === 404 ||
     message.includes('cannot post') ||
     message.includes('cannot put') ||
-    message.includes('not found')
+    message.includes('cannot get') ||
+    message.includes('route not found') ||
+    message.includes('endpoint not found') ||
+    (!hasStructuredApiError && status === 404 && message.includes('not found'))
   );
 };
 
@@ -410,6 +416,7 @@ const throwIfActionableResetError = (error) => {
 export const requestPasswordResetOtp = async (mobile = '') => {
   const phone = String(mobile || '').replace(/\D/g, '').slice(-10);
   const endpoints = [
+    '/api/auth/forgot-password-init',
     '/api/auth/forgot-password',
     '/api/auth/forgot-password/send-otp',
     '/api/auth/password/forgot',
@@ -418,9 +425,9 @@ export const requestPasswordResetOtp = async (mobile = '') => {
     '/api/auth/send-otp',
   ];
   const payloads = [
+    { identifier: phone },
     { mobile: phone },
     { phone },
-    { identifier: phone },
     { mobile: phone, type: 'forgot-password' },
     { phone, type: 'forgot-password' },
   ].map(compactPayload);
@@ -455,45 +462,12 @@ export const verifyPasswordResetOtp = async ({
   otp = '',
 } = {}) => {
   const phone = String(mobile || '').replace(/\D/g, '').slice(-10);
-  const endpoints = [
-    '/api/auth/forgot-password/verify-otp',
-    '/api/auth/reset-password/verify-otp',
-    '/api/auth/verify-reset-otp',
-    '/api/auth/verify-otp',
-  ];
-  const payloads = [
-    { mobile: phone, userId, otp, type: 'forgot-password' },
-    { phone, userId, otp, type: 'forgot-password' },
-    { mobile: phone, otp, type: 'forgot-password' },
-    { phone, otp, type: 'forgot-password' },
-    { userId, otp },
-    { mobile: phone, otp },
-    { phone, otp },
-  ].map(compactPayload);
-
-  let lastError = null;
-  for (const path of endpoints) {
-    for (const body of payloads) {
-      try {
-        const res = await apiRequest(path, {
-          method: 'POST',
-          body,
-          timeout: 10000,
-        });
-        return {
-          ...res,
-          userId: extractUserId(res.data) || userId,
-          resetToken: extractResetToken(res.data),
-        };
-      } catch (error) {
-        lastError = error;
-        throwIfActionableResetError(error);
-      }
-    }
-  }
-
+  // The web app verifies the OTP and updates the password in one backend call:
+  // POST /api/auth/forgot-password-verify { userId, otp, newPassword }.
+  // Keep this intermediate step local so the final reset call remains the
+  // single source of truth and does not hit registration OTP endpoints.
   return {
-    data: { success: true, deferred: true },
+    data: { success: true, deferred: true, mobile: phone, otp },
     status: 200,
     headers: null,
     userId,
@@ -511,6 +485,7 @@ export const resetForgotPassword = async ({
   const phone = String(mobile || '').replace(/\D/g, '').slice(-10);
   const nextPassword = String(password || '').trim();
   const endpoints = [
+    '/api/auth/forgot-password-verify',
     '/api/auth/reset-password',
     '/api/auth/forgot-password/reset',
     '/api/auth/password/reset',
@@ -532,6 +507,9 @@ export const resetForgotPassword = async ({
     type: 'forgot-password',
   };
   const payloads = [
+    { userId, otp, newPassword: nextPassword },
+    { userId, otp, password: nextPassword },
+    { identifier: phone, otp, newPassword: nextPassword },
     basePayload,
     { mobile: phone, userId, otp, password: nextPassword, confirmPassword: nextPassword },
     { mobile: phone, userId, otp, newPassword: nextPassword, confirmPassword: nextPassword },
