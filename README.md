@@ -120,4 +120,5 @@ platforms: `docs/versioning-releases.md`.
 - [`docs/code-flow.md`](docs/code-flow.md) — how to read/trace the codebase, day-to-day workflow
 - [`docs/versioning-releases.md`](docs/versioning-releases.md) — version bumps, release builds
 - [`docs/ios-native-modules.md`](docs/ios-native-modules.md) — native module parity status
-- [`docs/app-store-submission.md`](docs/app-store-submission.md) — Apple Developer + App Store Connect + submission checklist
+- [`docs/app-store-submission.md`](docs/app-store-submission.md) — Apple Developer + App Store Connect + submission checklist, every field filled in
+- `legal/` — hosted privacy policy, terms, and support pages (for the Privacy Policy URL / Support URL App Store Connect requires)
