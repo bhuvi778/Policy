@@ -60,6 +60,7 @@ yarn-error.*
 
 # App Store screenshot staging (local reference only, not source)
 /store-assets/
+/docs/screenshots/
 
 # release artifacts and local verification captures
 /*.apk
