@@ -191,26 +191,70 @@ site has better versions live, but they're harmless to leave in the repo.
 
 ## 6. App Privacy questionnaire — concrete answers
 
-Based on what the code actually collects (checked `RegisterScreen.js`,
-`ContactUsScreen.js`, `MyProfileScreen.js`, `ScanScreen.js`,
-`SubscriptionPlansScreen.js` — no analytics/crash-reporting SDK is present
-in `package.json` as of this writing, so answer "Data Not Collected" for
-Analytics and Diagnostics unless you've added one since):
+### Your team lead's ask: fewer items linked to identity
+
+Went back through the code specifically looking for what's genuinely
+avoidable vs. what's load-bearing for having an account at all. Three real,
+code-verified reductions from the original draft:
+
+1. **Payment Info → declare "Not Collected."** `PaymentWebViewScreen.js`
+   loads Razorpay's own `checkout.js` inside the WebView — the card/bank
+   details never pass through PolicyBhandar's app code or backend. The app
+   only ever receives back `razorpay_payment_id`, `razorpay_subscription_id`,
+   `razorpay_signature` — opaque transaction reference strings, not the
+   financial account data Apple's "Payment Info" category actually means
+   (card numbers, bank account numbers). Since PolicyBhandar's own app/servers
+   never touch that data, it's accurate — not a stretch — to not declare it.
+2. **Photos → narrowed to "profile photo" only, scanned card photos dropped.**
+   Checked `DataEntryScreen.js`'s `buildEntry()` (the object actually sent
+   to `saveClient`/the backend when an advisor saves a scanned contact): it
+   sends `name, mobile, dob, memberType, policyNo, company, plan, premium,
+   dueDate` — **the card photo itself is never included.** The OCR crop/scan
+   runs entirely on-device (Vision on iOS / ML Kit on Android) and the photo
+   only lives in a local temp file for the on-screen preview. Apple's privacy
+   label only counts data that's actually collected off-device — since this
+   photo never leaves the device, it doesn't need to be declared at all. The
+   profile photo (`MyProfileScreen.js`) is genuinely uploaded, so that one
+   stays.
+3. **Physical Address → worth reconsidering entirely.** What's actually
+   collected is a bare 6-digit PIN/postal code (`RegisterScreen.js`'s "Area
+   Pin Code" field), not a mailing address. Apple's "Physical Address"
+   category is specifically about mailing addresses — a standalone postal
+   code used only for regional routing (branch/franchise assignment, per
+   `appData.js`'s `getAssignedFranchise`/`getAssignedRep`) is common practice
+   to leave undeclared under that category. Flagging this as a judgment call
+   for you/your team lead rather than deciding it myself — it's defensible
+   either way, but leaving it out is standard for bare postal codes.
+
+What's **left and can't be reduced further** without removing features:
+Name, Phone Number, Email, User ID (auth token) — these are the account
+system itself, inherent to any app with login. Other User Content
+(client/prospect records) — inherent to the CRM feature; it's tied to the
+advisor's account because the advisor owns those records. There's no way
+to keep those features and not have this data linked to the account.
+
+### Updated table
 
 | Data type | Collected? | Linked to identity? | Purpose |
 |---|---|---|---|
 | Name | Yes | Yes | App Functionality, Account creation |
 | Phone Number | Yes | Yes | App Functionality (login is mobile-number based), Account creation |
 | Email Address | Yes | Yes | App Functionality, Customer Support |
-| Physical Address | Yes (PIN code) | Yes | App Functionality |
-| Photos | Yes (profile photo, scanned visiting cards) | Yes | App Functionality |
+| Physical Address | **No** *(bare PIN code, not a mailing address — see above)* | — | — |
+| Photos | Yes — **profile photo only** | Yes | App Functionality |
 | Other User Content | Yes (client/prospect records advisors enter) | Yes | App Functionality |
 | User ID | Yes (auth token) | Yes | App Functionality |
-| Payment Info | Yes (via Razorpay) | Yes | App Functionality (Payments) |
+| Payment Info | **No** *(Razorpay handles it directly — see above)* | — | — |
 | Precise/Coarse Location | No | — | — |
 | Contacts (device address book) | No — app does not read the device contact list | — | — |
 | Analytics/Usage Data | No SDK detected — re-check if you add one later | — | — |
 | Diagnostics/Crash Data | No SDK detected — re-check if you add one later | — | — |
+
+That's 5 linked-to-identity rows instead of 8 — Name/Phone/Email/User
+ID/Other User Content, all of them genuinely required for an authenticated
+CRM app to function. If your team lead wants it lower than that, the only
+further lever is removing a feature (e.g. not letting advisors store client
+records at all), not a privacy-label wording change.
 
 Declare "Data Used to Track You" = **No** for all of the above — nothing
 in this codebase does cross-app/cross-site ad tracking.
@@ -230,39 +274,113 @@ bump `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION` → select "Any iOS
 Device (arm64)" → **Product → Archive** → Organizer → **Distribute App →
 App Store Connect → Upload**.
 
-## 8. Screenshots
+## 8. App icon — done
 
-Required sizes as of this writing: **6.9" display** (iPhone 17 Pro Max
-class) at minimum; add iPad sizes only if you keep iPad orientations
-enabled (this project currently declares
-`UISupportedInterfaceOrientations~ipad` in `Info.plist`, so plan for at
-least one iPad size too, or remove iPad orientation support if you don't
-want to shoot iPad screenshots).
+The iOS app had no icon at all (the asset catalog slots existed but no
+image files were wired in — it would have shown a blank icon). Fixed:
+`ios/PolicyBhandar/Images.xcassets/AppIcon.appiconset/AppIcon-1024.png` is
+now a crisp 1024×1024, RGB (no alpha — Apple rejects icons with
+transparency), redrawn at full resolution from the same design as the
+Android launcher icon (red `#BF392B` background, white circle, "PB"
+monogram) rather than upscaled from Android's small PNG, so it stays sharp
+at every size. Wired up using Xcode's modern "single size" App Icon format
+— `Contents.json` now just points at that one 1024 image and Xcode derives
+every smaller size automatically at build time; no need to hand-generate
+the old 9-file icon set.
+
+Check it yourself: in Simulator, `Cmd+Shift+H` to go to the home screen
+and look for the PolicyBhandar icon (I can't script this myself — Simulator
+keystroke automation needs a macOS Accessibility permission I'm not going
+to request on your behalf).
+
+If you'd rather use the full marketing-lockup logo
+(`src/assets/images/policybhandar_logo.png` — wings/flame/book emblem with
+"PolicyBhandaar" text underneath) instead of the "PB" monogram, say so —
+but note Apple's Human Interface Guidelines specifically discourage text in
+app icons because it becomes illegible at small sizes (the 60pt icon on a
+phone home screen, or the ~20pt icon in Settings/Spotlight) — the monogram
+is the safer, more standard choice, which is presumably why the Android
+launcher already uses it instead of the full lockup.
+
+## 9. Screenshots
+
+### Required sizes (as of this writing)
+- **6.9" display** (iPhone 17 Pro Max / 16 Pro Max class) — **required**, 1320×2868px portrait
+- **iPad 13" display** — only required if you keep iPad support. This
+  project's `Info.plist` currently declares
+  `UISupportedInterfaceOrientations~ipad`, meaning it's flagged as
+  iPad-compatible — either shoot iPad screenshots too, or remove that key
+  if you don't actually want to support/test iPad.
+- Apple auto-scales your largest uploaded size down to cover older/smaller
+  device families in the listing — you don't need to shoot every size by
+  hand, just the largest required one per family.
+- Format: PNG or JPEG, RGB (no alpha channel), exact pixel dimensions
+  above, portrait orientation, up to 10 images per size.
+
+### Before you shoot: clean up what's visible
+
+1. **Log in with a populated demo account first.** Empty states
+   (no materials, no clients, no due dates) read as a broken/unfinished
+   app to anyone browsing the App Store. Use the same demo account you'll
+   give App Review (§10).
+2. **Set a clean status bar.** Simulator shows your Mac's real time/battery
+   by default, which looks inconsistent across screenshots taken minutes
+   apart. Override it to Apple's standard marketing status bar before
+   capturing:
+   ```bash
+   xcrun simctl status_bar booted override \
+     --time "9:41" --dataNetwork wifi --wifiMode active --wifiBars 3 \
+     --cellularMode active --cellularBars 4 --batteryState charged --batteryLevel 100
+   ```
+   `9:41` is Apple's own marketing-screenshot convention (it's the time in
+   basically every Apple keynote screenshot) — using it isn't required, but
+   it signals you know what you're doing and keeps every screenshot's
+   status bar identical.
+3. **Don't ship the dev banner.** Every screenshot taken so far in this
+   session shows a yellow "Open debugger to view warnings" banner at the
+   bottom — that's Metro's debug-mode LogBox indicator and must not appear
+   in App Store screenshots. Either dismiss it (tap the ✕ before each
+   screenshot) or, better, build in **Release** configuration for the
+   screenshot pass so dev-only UI doesn't render at all:
+   ```bash
+   npx react-native run-ios --simulator "iPhone 17 Pro Max" --mode Release
+   ```
+
+### Capture
 
 ```bash
 xcrun simctl boot "iPhone 17 Pro Max"
-npx react-native run-ios --simulator "iPhone 17 Pro Max"
-# navigate to each screen, then:
-xcrun simctl io booted screenshot ~/Desktop/01-login.png
-xcrun simctl io booted screenshot ~/Desktop/02-home.png
+npx react-native run-ios --simulator "iPhone 17 Pro Max" --mode Release
+xcrun simctl status_bar booted override --time "9:41" --dataNetwork wifi --wifiMode active --wifiBars 3 --cellularMode active --cellularBars 4 --batteryState charged --batteryLevel 100
+
+# log in, navigate to each screen, then:
+xcrun simctl io booted screenshot ~/Desktop/01-home.png
+xcrun simctl io booted screenshot ~/Desktop/02-materials.png
 xcrun simctl io booted screenshot ~/Desktop/03-scan.png
-xcrun simctl io booted screenshot ~/Desktop/04-materials.png
+xcrun simctl io booted screenshot ~/Desktop/04-clients.png
 xcrun simctl io booted screenshot ~/Desktop/05-profile.png
 ```
 
-Suggested 5 screens to capture (in this order, tells a story): Home/dashboard →
-material browsing → visiting card scan → prospect/client management →
-profile/digital card. Log in with a real or demo account first so the
-screens show populated content, not empty states.
+Suggested 5 screens (in this order, tells a story a browsing user can
+follow at a glance): Home/dashboard → material browsing → visiting-card
+scan → prospect/client management → profile/digital card.
 
-## 9. Demo account for review
+### Optional polish
+Plain device screenshots (exactly what the commands above produce) are
+fully accepted by Apple and are literally what Apple's own guidelines
+recommend leading with — you do **not** need device-frame mockups or
+marketing text overlays. If you want them anyway for a more "designed"
+look, that's a separate design pass (e.g. Figma/Canva templates) — say the
+word and I can help with layout, but it's not required for submission.
+
+## 10. Demo account for review
 
 Apple's reviewer needs to log in. In App Store Connect's **App Review
 Information** section, provide a working mobile number + credentials for
 an account with real (or realistic seeded) content visible — an empty
 account reads as a broken app to a reviewer who has no context.
 
-## 10. Submit
+## 11. Submit
 
 **Add for Review → Submit to App Review**, only once:
 - ✅ The build is attached and finished processing
