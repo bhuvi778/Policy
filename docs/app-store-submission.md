@@ -140,53 +140,54 @@ questions since there's no public posting/sharing between strangers).
 Expected result: **4+**.
 
 ### Support URL (required)
-Host `legal/support.html` from this repo (see hosting steps below), or
-use your own existing support page if you have one.
+```
+https://www.policybhandar.com/
+```
+There's no dedicated `/contact-us` route (it redirects to home) — the
+homepage itself has a **Support & FAQs** section, a "Contact Support"
+button, and a contact form, which satisfies Apple's requirement that the
+Support URL let a user actually get help. If you'd rather have a URL that
+scrolls straight to that section, use `https://www.policybhandar.com/#faq`
+(confirmed working).
 
 ### Marketing URL (optional)
-Can be left blank, or point at the same hosted page.
+```
+https://www.policybhandar.com/
+```
 
-### Privacy Policy URL (required)
-Host `legal/privacy-policy.html` from this repo (see below). This is
-**required** and must be a real, live URL — App Store Connect will not
-accept a blank field or an in-app-only policy.
+### Privacy Policy URL (required) — verified live
+```
+https://www.policybhandar.com/privacy-policy
+```
+Confirmed this is already live and real (not a placeholder) — it explicitly
+covers the "Policy Bhandar iOS App and Website" and mentions Apple's App
+Tracking Transparency framework. One thing to reconcile before submitting:
+this app's current codebase has no analytics/ad-tracking SDK, so the ATT
+mention is just generic boilerplate — don't let it push you into answering
+the App Privacy questionnaire's "used to track you" questions as "Yes"
+when nothing in the app actually does IDFA-based tracking today (see §6).
 
-## 5. Hosting the legal pages (GitHub Pages, using your existing repo)
+### Terms of Use / EULA URL — verified live, already Apple-formatted
+```
+https://www.policybhandar.com/terms-and-conditions
+```
+This page is already written as an Apple Standard EULA (explicitly names
+Apple as a third-party beneficiary, disclaims Apple's warranty/support
+obligations, etc.) — someone clearly prepared this with iOS submission in
+mind already. You can paste this into App Store Connect's **App
+Information → License Agreement → Custom License Agreement** field, and/or
+just link it from your description.
 
-Three ready-to-publish pages already exist in this repo at `legal/`:
-`privacy-policy.html`, `terms.html`, `support.html` — written from the
-same content already in `src/screens/PrivacyPolicyScreen.js` and
-`TermsScreen.js`, adapted for a public web page.
+### Note: Refund Policy link is currently broken
+The footer's "Refund Policy" link (`href="#"`) doesn't go anywhere yet —
+not required by Apple as a distinct field, but worth fixing on the
+website since the footer promises it. Not a submission blocker.
 
-They're kept in `legal/` rather than `docs/` deliberately — `docs/` has
-internal engineering notes (commands, architecture) you don't necessarily
-want to publish as public web pages; `legal/` is just the two/three pages
-Apple and your users need to see.
-
-**To publish them (GitHub Pages, ~2 minutes):**
-
-1. On GitHub: your repo → **Settings → Pages**.
-2. Under **Build and deployment → Source**, choose **Deploy from a branch**.
-3. **Branch:** `main`, **Folder:** `/legal` (if `/legal` isn't offered in
-   the folder dropdown, use `/docs` instead — GitHub Pages only supports
-   serving from repo root or a folder literally named `docs`; in that
-   case, tell me and I'll move these three files into `docs/legal/` so the
-   internal docs aren't mixed in with the public path, or just accept that
-   `docs/*.md` renders as plain text/404s via Pages, which is harmless —
-   only `.html` files actually render as pages).
-4. Save. GitHub gives you a URL like:
-   ```
-   https://bhuvi778.github.io/Policy/privacy-policy.html
-   https://bhuvi778.github.io/Policy/terms.html
-   https://bhuvi778.github.io/Policy/support.html
-   ```
-5. Paste the `privacy-policy.html` URL into App Store Connect's **Privacy
-   Policy URL** field, and the `support.html` URL into **Support URL**.
-
-If GitHub Pages only lets you pick `/docs` as the source folder in your
-repo's Pages settings (this varies by GitHub's current UI), tell me and
-I'll move the three files under `docs/legal/` and update this doc's URLs
-to match — a one-line change either way.
+### (Fallback) Self-hosted legal pages
+`legal/privacy-policy.html`, `terms.html`, `support.html` were drafted
+earlier in this repo as a backup, in case `policybhandar.com` URLs above
+aren't your final answer — they're no longer needed now that the real
+site has better versions live, but they're harmless to leave in the repo.
 
 ## 6. App Privacy questionnaire — concrete answers
 
@@ -213,6 +214,14 @@ Analytics and Diagnostics unless you've added one since):
 
 Declare "Data Used to Track You" = **No** for all of the above — nothing
 in this codebase does cross-app/cross-site ad tracking.
+
+Note: the live `policybhandar.com/privacy-policy` text mentions collecting
+"Usage Data (pages visited, features used, time spent)" — the app doesn't
+currently do this (no analytics SDK). Either it's aspirational boilerplate
+you can leave as-is (Apple checks the App Privacy nutrition label against
+actual behavior, not every sentence of the policy prose), or add basic
+usage analytics later to match it — your call, not a submission blocker
+either way.
 
 ## 7. Archive & upload
 
