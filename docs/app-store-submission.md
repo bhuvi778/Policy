@@ -67,16 +67,25 @@ here and enable the **In-App Purchase** capability on this App ID.
 | Bundle ID | `com.policybhandar` (select the one you just registered) |
 | SKU | `policybhandar-ios-001` |
 
-## 3. Xcode signing — your action
+## 3. Xcode signing — done
 
-`ios/PolicyBhandar.xcworkspace` → target **PolicyBhandar** → **Signing &
-Capabilities**:
-- Check **Automatically manage signing**
-- **Team:** pick your account (Xcode → Settings → Accounts must have your
-  Apple ID signed in first — the "Prashant Jha" account from your Apple
-  Developer screenshot)
+`DEVELOPMENT_TEAM = BZK2LA2C57` (the "Prashant Jha" team from your Apple
+Developer screenshot) is now set in `project.pbxproj` — Xcode wrote this
+when the project was open with your account signed in. Double-check in
+**Signing & Capabilities** that **Automatically manage signing** is
+checked and the Team dropdown shows your account; if so, Xcode will
+create the certificate/provisioning profile automatically on first
+Archive, no further action needed here.
 
-Xcode creates the certificate/profile automatically on first Archive.
+### iPhone-only (iPad support dropped)
+
+`TARGETED_DEVICE_FAMILY` changed from `"1,2"` (iPhone+iPad) to `1`
+(iPhone-only) in the project. Removed the now-orphaned
+`UISupportedInterfaceOrientations~ipad` key from `Info.plist` to match —
+keeping it around with iPad support off is just confusing dead config.
+Net effect: you no longer need iPad screenshots for §9, and the App Store
+listing will only offer this app on iPhone. If dropping iPad wasn't
+intentional, this is easy to revert — just say so.
 
 ## 4. Store listing copy — ready to paste
 
@@ -129,6 +138,28 @@ insurance,advisor,LIC,agent,policy,mutual fund,CRM,recruitment,training,marketin
 ### Category
 - Primary: **Business**
 - Secondary: **Finance**
+
+### Copyright (App Information page, required to submit)
+```
+2026 Policy Bhandar
+```
+Matches the live site's footer exactly (`© 2026 Policy Bhandar. All
+rights reserved.`) — App Store Connect adds the `©` itself, don't type it.
+Just the year + legal/brand name, no "All rights reserved" suffix needed.
+
+### Content Rights (App Information page, required to submit)
+Asks whether your app contains, shows, or accesses **third-party**
+content you don't own the rights to. This is a business/legal call, not
+something derivable from the code — I can't answer it for you:
+- If every marketing banner/template/image in the app was created for or
+  licensed to Policy Bhandar (including any insurer logos/brand names
+  shown in the marketing materials, if those partnerships are real and
+  authorized) → answer **"No, it does not contain, show, or access
+  third-party content."**
+- If any of that content is stock photography without a proper license,
+  or another company's branding used without permission → answer **"Yes"**
+  and Apple will ask you to confirm you have the rights to display it.
+Get this right — it's a legal representation to Apple, not a formality.
 
 ### Age rating
 Answer "None" to every content question (violence, mature/suggestive
@@ -274,6 +305,22 @@ bump `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION` → select "Any iOS
 Device (arm64)" → **Product → Archive** → Organizer → **Distribute App →
 App Store Connect → Upload**.
 
+### Export compliance — done, won't ask again
+
+`Info.plist` now has `ITSAppUsesNonExemptEncryption = false`. Verified in
+code before setting this: no crypto library anywhere in `package.json`, no
+hand-rolled encryption/cipher code in `src/`, and the app's only network
+traffic is standard `https://` calls (`api2.primeimpact.in`) through React
+Native's normal networking, which rides on iOS's built-in `URLSession`/TLS.
+The app doesn't implement or bundle any encryption algorithm itself, so it
+qualifies for the standard HTTPS-only export compliance exemption. With
+this key set, Xcode/App Store Connect will skip the encryption
+questionnaire on every future upload instead of asking each time.
+
+If you ever add a crypto library, client-side hashing, or anything beyond
+plain HTTPS, revisit this — the exemption stops applying and the key needs
+to change.
+
 ## 8. App icon — done
 
 The iOS app had no icon at all (the asset catalog slots existed but no
@@ -306,11 +353,8 @@ launcher already uses it instead of the full lockup.
 
 ### Required sizes (as of this writing)
 - **6.9" display** (iPhone 17 Pro Max / 16 Pro Max class) — **required**, 1320×2868px portrait
-- **iPad 13" display** — only required if you keep iPad support. This
-  project's `Info.plist` currently declares
-  `UISupportedInterfaceOrientations~ipad`, meaning it's flagged as
-  iPad-compatible — either shoot iPad screenshots too, or remove that key
-  if you don't actually want to support/test iPad.
+- **iPad** — not needed. `TARGETED_DEVICE_FAMILY` is now iPhone-only (§3),
+  so skip iPad screenshots entirely.
 - Apple auto-scales your largest uploaded size down to cover older/smaller
   device families in the listing — you don't need to shoot every size by
   hand, just the largest required one per family.
