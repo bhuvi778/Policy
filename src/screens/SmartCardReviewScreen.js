@@ -5,11 +5,13 @@ import {
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
 
 const GOOGLE_REVIEW_URL = 'https://g.page/r/review'; // Replace with actual Google review link
 
 const SmartCardReviewScreen = ({ navigation }) => {
+  const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState('google'); // 'google' | 'normal'
   const [rating, setRating] = useState(0);
   const [reviewText, setReviewText] = useState('');
@@ -33,7 +35,7 @@ const SmartCardReviewScreen = ({ navigation }) => {
   return (
     <View style={styles.root}>
       <StatusBar backgroundColor={Colors.primary} barStyle="light-content" />
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <MaterialIcons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>

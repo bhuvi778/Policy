@@ -317,6 +317,15 @@ launcher already uses it instead of the full lockup.
 - Format: PNG or JPEG, RGB (no alpha channel), exact pixel dimensions
   above, portrait orientation, up to 10 images per size.
 
+**Double-check the simulator device before capturing anything.** Plain
+"iPhone 17" (no "Pro Max") outputs 1206×2622 screenshots, not the required
+1320×2868. This isn't hypothetical: a batch
+of otherwise-good screenshots taken during this project on plain "iPhone
+17" had to be set aside for exactly this reason (kept locally at
+`store-assets/screenshots/iphone-17-1206x2622-reference/` as content/
+framing reference, not for upload). Verify with `sips -g pixelWidth -g
+pixelHeight yourfile.png` before trusting any batch.
+
 ### Before you shoot: clean up what's visible
 
 1. **Log in with a populated demo account first.** Empty states

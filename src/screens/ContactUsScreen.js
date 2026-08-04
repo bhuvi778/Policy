@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
 import { submitContact } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -42,6 +43,7 @@ const ContactCard = ({ icon, iconColor, title, value, onPress, subtitle }) => {
 };
 
 const ContactUsScreen = ({ navigation }) => {
+  const insets = useSafeAreaInsets();
   const { user = {} } = useAuth();
   const [name, setName] = useState('');
   const [message, setMessage] = useState('');
@@ -96,7 +98,7 @@ const ContactUsScreen = ({ navigation }) => {
   return (
     <View style={styles.root}>
       <StatusBar backgroundColor={Colors.primary} barStyle="light-content" />
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <MaterialIcons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>

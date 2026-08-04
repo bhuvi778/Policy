@@ -4,6 +4,7 @@ import {
   StatusBar, Platform, ActivityIndicator,
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
 import { BRAND, loadAppSettings } from '../services/appData';
 
@@ -49,6 +50,7 @@ const rights = [
 ];
 
 const PrivacyPolicyScreen = ({ navigation }) => {
+  const insets = useSafeAreaInsets();
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -74,7 +76,7 @@ const PrivacyPolicyScreen = ({ navigation }) => {
   return (
     <View style={styles.root}>
       <StatusBar backgroundColor={Colors.primary} barStyle="light-content" />
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <MaterialIcons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>

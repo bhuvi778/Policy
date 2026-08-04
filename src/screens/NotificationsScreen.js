@@ -6,6 +6,7 @@ import {
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
 import { loadDynamicNotifications } from '../services/appData';
 
@@ -81,6 +82,7 @@ const NotificationItem = ({ item, onPress, onDelete }) => (
 );
 
 const NotificationsScreen = ({ navigation }) => {
+  const insets = useSafeAreaInsets();
   const [notifs, setNotifs] = useState([]);
   const [loading, setLoading] = useState(true);
   const unread = notifs.filter((n) => n.unread).length;
@@ -123,7 +125,7 @@ const NotificationsScreen = ({ navigation }) => {
     <View style={styles.root}>
       <StatusBar backgroundColor={Colors.primary} barStyle="light-content" />
 
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconBtn}>
           <MaterialIcons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>

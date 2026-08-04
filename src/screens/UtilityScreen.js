@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
 
 // ── EMI Calculator ─────────────────────────────────────────────────────────────
@@ -202,10 +203,12 @@ const ResultRow = ({ label, value, highlight }) => (
 );
 
 // ── Main Screen ─────────────────────────────────────────────────────────────────
-const UtilityScreen = ({ navigation }) => (
+const UtilityScreen = ({ navigation }) => {
+  const insets = useSafeAreaInsets();
+  return (
   <View style={styles.root}>
     <StatusBar backgroundColor={Colors.primary} barStyle="light-content" />
-    <View style={styles.header}>
+    <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
       <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
         <MaterialIcons name="arrow-back" size={24} color="#fff" />
       </TouchableOpacity>
@@ -220,7 +223,8 @@ const UtilityScreen = ({ navigation }) => (
       <AgeCalc />
     </ScrollView>
   </View>
-);
+  );
+};
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#F5F5F5' },

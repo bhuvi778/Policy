@@ -6,6 +6,7 @@ import {
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
 
 const { width: SW } = Dimensions.get('window');
@@ -169,6 +170,7 @@ const ProspectItem = ({ item, onDelete }) => (
 
 // ─── Main Screen ────────────────────────────────────────────────────────────────
 const ProspectManagementScreen = ({ navigation }) => {
+  const insets = useSafeAreaInsets();
   const [target, setTarget] = useState(INITIAL_TARGET);
   const [activeTab, setActiveTab] = useState('Reminder');
   const [greetingTab, setGreetingTab] = useState("Today's\nGreetings");
@@ -212,7 +214,7 @@ const ProspectManagementScreen = ({ navigation }) => {
       <StatusBar backgroundColor="#1565C0" barStyle="light-content" />
 
       {/* Header — blue like screenshot */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <MaterialIcons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>

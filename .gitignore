@@ -58,6 +58,9 @@ yarn-error.*
 /android/.kotlin/
 /android/release-build*.log
 
+# App Store screenshot staging (local reference only, not source)
+/store-assets/
+
 # release artifacts and local verification captures
 /*.apk
 /*.aab

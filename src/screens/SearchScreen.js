@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
 import { getMaterials } from '../services/api';
 import { normalizeMaterialsForUser } from '../services/contentMapper';
@@ -44,6 +45,7 @@ const matches = (item, query) => {
 };
 
 const SearchScreen = ({ navigation }) => {
+  const insets = useSafeAreaInsets();
   const { user = {} } = useAuth() || {};
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
@@ -162,7 +164,7 @@ const SearchScreen = ({ navigation }) => {
     <View style={styles.root}>
       <StatusBar backgroundColor={Colors.primary} barStyle="light-content" />
 
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <MaterialIcons name="arrow-back" size={24} color={Colors.white} />
         </TouchableOpacity>
