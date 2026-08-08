@@ -55,7 +55,21 @@ const extractUserData = (payload) => {
     payload.activePlan ||
     payload.planId ||
     payload.subscription ||
-    payload.currentPlan
+    payload.currentPlan ||
+    payload.profileImage ||
+    payload.profileImageUrl ||
+    payload.profilePhoto ||
+    payload.profilePhotoUrl ||
+    payload.profilePicture ||
+    payload.profilePictureUrl ||
+    payload.profilePic ||
+    payload.profile_pic ||
+    payload.avatar ||
+    payload.avatarUrl ||
+    payload.photo ||
+    payload.photoUrl ||
+    payload.image ||
+    payload.imageUrl
   ) {
     return payload;
   }
@@ -78,6 +92,20 @@ const mergeUserData = (previous, next) => {
     'dob',
     'pinCode',
     'licBranch',
+    'profileImage',
+    'profileImageUrl',
+    'profilePhoto',
+    'profilePhotoUrl',
+    'profilePicture',
+    'profilePictureUrl',
+    'profilePic',
+    'profile_pic',
+    'avatar',
+    'avatarUrl',
+    'photo',
+    'photoUrl',
+    'image',
+    'imageUrl',
   ];
 
   keepPreviousWhenNextIsBlank.forEach((key) => {

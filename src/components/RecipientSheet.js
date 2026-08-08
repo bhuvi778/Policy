@@ -1,9 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Modal,
   NativeModules,
+  PanResponder,
   Pressable,
   ScrollView,
   Share,
@@ -38,6 +40,12 @@ const QR_POSITIONS = [
 ];
 
 const { PolicyBhandarClipboard } = NativeModules;
+const APP_LOGO = require('../assets/images/policybhandar_logo.png');
+const APP_LOGO_NATIVE_URL = 'policybhandar://logo';
+const LOGO_OVERLAY_SIZE = 72;
+
+const clamp = (value, minValue = 0, maxValue = 1) =>
+  Math.min(maxValue, Math.max(minValue, value));
 
 const assetUrl = (value) => {
   if (!value) return '';
@@ -91,6 +99,10 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
   const [actionVisible, setActionVisible] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [preparedAction, setPreparedAction] = useState(null);
+  const [previewLayout, setPreviewLayout] = useState({ width: 0, height: 0 });
+  const [logoPosition, setLogoPosition] = useState({ x: 0.06, y: 0.06 });
+  const logoPositionRef = useRef(logoPosition);
+  const dragStartRef = useRef(logoPosition);
 
   const templateSettings = getTemplateSettings(item || {});
   const advisorName = getAdvisorDisplayName(user);
@@ -177,6 +189,33 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
   const qrCodeUrl = uploadedQrCodeUrl || buildQrImageUrl(qrData);
   const previewUrl = firstAssetUrl(item?.image, item?.thumbnail, item?.imageUrl, getDownloadSourceUrl(item || {}));
   const languageLabel = item?.language || item?.raw?.language || '';
+  const logoDisplaySource = logoUrl ? { uri: logoUrl } : APP_LOGO;
+  const logoDownloadUrl = logoUrl || APP_LOGO_NATIVE_URL;
+
+  const updateLogoPosition = (nextPosition) => {
+    logoPositionRef.current = nextPosition;
+    setLogoPosition(nextPosition);
+  };
+
+  const logoPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gestureState) =>
+        Math.abs(gestureState.dx) > 2 || Math.abs(gestureState.dy) > 2,
+      onPanResponderGrant: () => {
+        dragStartRef.current = logoPositionRef.current;
+      },
+      onPanResponderMove: (_, gestureState) => {
+        if (!previewLayout.width || !previewLayout.height) return;
+        const maxX = Math.max(1, previewLayout.width - LOGO_OVERLAY_SIZE);
+        const maxY = Math.max(1, previewLayout.height - LOGO_OVERLAY_SIZE);
+        updateLogoPosition({
+          x: clamp(dragStartRef.current.x + gestureState.dx / maxX),
+          y: clamp(dragStartRef.current.y + gestureState.dy / maxY),
+        });
+      },
+    }),
+  ).current;
 
   useEffect(() => {
     if (visible) {
@@ -184,6 +223,7 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
       setFontColor('#111111');
       setOutputSize('backend');
       setQrPosition('right');
+      updateLogoPosition({ x: 0.06, y: 0.06 });
     }
   }, [defaultRecipientName, visible]);
 
@@ -199,6 +239,7 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
     setSettingsOpen(false);
     setOutputSize('backend');
     setQrPosition('right');
+    updateLogoPosition({ x: 0.06, y: 0.06 });
     setDownloading(false);
     setActionVisible(false);
     setActionLoading(false);
@@ -227,6 +268,11 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
       watermark: waterMark,
       includeWatermark: waterMark,
       watermarkText: recipientName || advisorName,
+      logoOverlay: yourLogo,
+      includeLogoOverlay: yourLogo,
+      logoOverlayX: logoPosition.x,
+      logoOverlayY: logoPosition.y,
+      logoOverlayUrl: yourLogo ? logoDownloadUrl : '',
       socialCaption: includeSocialCaption,
       qrCode: includeQrCode,
       fontColor,
@@ -239,7 +285,7 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
       advisorDesignation,
       advisorMobile: user.mobile || user.phone || '',
       advisorEmail: user.email || '',
-      logoUrl: includeLogo ? logoUrl : '',
+      logoUrl: includeLogo ? logoDownloadUrl : '',
       qrCodeUrl: includeQrCode ? qrCodeUrl : '',
       qrData,
     };
@@ -387,12 +433,15 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
                   <Text style={styles.languageText}>{languageLabel}</Text>
                 </View>
               ) : null}
-              <View style={styles.previewMedia}>
+              <View
+                style={styles.previewMedia}
+                onLayout={(event) => setPreviewLayout(event.nativeEvent.layout)}
+              >
                 {previewUrl ? (
                   <FastImage
                     source={typeof previewUrl === 'string' ? { uri: previewUrl } : previewUrl}
                     style={styles.previewImage}
-                    resizeMode="cover"
+                    resizeMode="contain"
                     priority="high"
                   />
                 ) : (
@@ -401,6 +450,27 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
                     <Text style={styles.previewEmptyText}>Template preview</Text>
                   </View>
                 )}
+                {yourLogo ? (
+                  <View
+                    style={[
+                      styles.logoOverlay,
+                      {
+                        left: logoPosition.x * Math.max(1, previewLayout.width - LOGO_OVERLAY_SIZE),
+                        top: logoPosition.y * Math.max(1, previewLayout.height - LOGO_OVERLAY_SIZE),
+                      },
+                    ]}
+                    {...logoPanResponder.panHandlers}
+                  >
+                    {logoUrl ? (
+                      <FastImage source={logoDisplaySource} style={styles.logoOverlayImage} resizeMode="contain" />
+                    ) : (
+                      <Image source={APP_LOGO} style={styles.logoOverlayImage} resizeMode="contain" />
+                    )}
+                    <View style={styles.logoDragHint}>
+                      <MaterialIcons name="open-with" size={12} color="#fff" />
+                    </View>
+                  </View>
+                ) : null}
               </View>
               {waterMark ? (
                 <ProfileFooterPreview
@@ -754,11 +824,41 @@ const styles = StyleSheet.create({
   previewMedia: {
     aspectRatio: 1.32,
     backgroundColor: '#EEF1F5',
+    position: 'relative',
     width: '100%',
   },
   previewImage: {
     height: '100%',
     width: '100%',
+  },
+  logoOverlay: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderColor: Colors.primary,
+    borderRadius: 10,
+    borderStyle: 'dashed',
+    borderWidth: 1.5,
+    elevation: 4,
+    height: LOGO_OVERLAY_SIZE,
+    justifyContent: 'center',
+    padding: 5,
+    position: 'absolute',
+    width: LOGO_OVERLAY_SIZE,
+  },
+  logoOverlayImage: {
+    height: '100%',
+    width: '100%',
+  },
+  logoDragHint: {
+    alignItems: 'center',
+    backgroundColor: Colors.primary,
+    borderRadius: 10,
+    height: 20,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: -8,
+    top: -8,
+    width: 20,
   },
   generatedModalWrap: {
     alignItems: 'center',

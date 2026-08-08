@@ -2,7 +2,14 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import FastImage from './FastImage';
-import { getMediaUrl, getThumbnailSource, isDocumentItem, isMediaItem, isVideoUrl } from '../utils/material';
+import {
+  getMaterialKindMeta,
+  getMediaUrl,
+  getThumbnailSource,
+  isDocumentItem,
+  isMediaItem,
+  isVideoUrl,
+} from '../utils/material';
 
 const initialsForTitle = (title = '') =>
   String(title || '?')
@@ -17,11 +24,20 @@ const MediaCardPreview = React.memo(({ item = {}, sectionTitle = '', imageStyle,
   const image = getThumbnailSource(item);
   const imageSource = typeof image === 'string' ? { uri: image } : image;
   const mediaUrl = getMediaUrl(item);
+  const kindMeta = getMaterialKindMeta(item, sectionTitle);
   const isDocument = isDocumentItem(item, sectionTitle);
   const shouldShowVideoPlaceholder = !image && mediaUrl && (isVideoUrl(mediaUrl) || isMediaItem(item, sectionTitle));
 
   if (imageSource) {
-    return <FastImage source={imageSource} style={imageStyle} resizeMode="cover" />;
+    return (
+      <>
+        <FastImage source={imageSource} style={imageStyle} resizeMode="cover" />
+        <View style={[styles.typeBadge, { backgroundColor: kindMeta.color }]}>
+          <MaterialIcons name={kindMeta.icon} size={12} color="#fff" />
+          <Text style={styles.typeBadgeText}>{kindMeta.label}</Text>
+        </View>
+      </>
+    );
   }
 
   if (shouldShowVideoPlaceholder) {
@@ -34,12 +50,10 @@ const MediaCardPreview = React.memo(({ item = {}, sectionTitle = '', imageStyle,
   }
 
   if (isDocument) {
-    const type = String(item.type || item.raw?.type || mediaUrl || sectionTitle || 'DOC').toUpperCase();
-    const label = type.includes('PPT') || type.includes('PRESENTATION') ? 'PPT' : type.includes('PDF') ? 'PDF' : 'DOC';
     return (
       <View style={[styles.placeholder, styles.documentPlaceholder, placeholderStyle]}>
-        <MaterialIcons name={label === 'PDF' ? 'picture-as-pdf' : 'description'} size={42} color="#FF6B5C" />
-        <Text style={[initialsStyle, styles.documentType]}>{label}</Text>
+        <MaterialIcons name={kindMeta.icon} size={42} color="#FF6B5C" />
+        <Text style={[initialsStyle, styles.documentType]}>{kindMeta.label}</Text>
         <Text style={subtitleStyle} numberOfLines={3}>{item.title || 'Document'}</Text>
       </View>
     );
@@ -79,6 +93,24 @@ const styles = StyleSheet.create({
   videoLabel: {
     color: 'rgba(255,255,255,0.86)',
     textAlign: 'center',
+  },
+  typeBadge: {
+    alignItems: 'center',
+    borderColor: 'rgba(255,255,255,0.94)',
+    borderRadius: 13,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 3,
+    left: 7,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    position: 'absolute',
+    top: 7,
+  },
+  typeBadgeText: {
+    color: '#fff',
+    fontSize: 9,
+    fontWeight: '900',
   },
 });
 

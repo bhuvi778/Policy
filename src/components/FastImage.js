@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Image, View } from 'react-native';
 
 const FastImage = React.memo(({
@@ -9,12 +9,21 @@ const FastImage = React.memo(({
   ...props
 }) => {
   const [failed, setFailed] = useState(false);
-  const normalizedSource =
-    typeof source === 'string'
-      ? { uri: source, cache: 'force-cache' }
-      : source?.uri
-        ? { ...source, cache: source.cache || 'force-cache' }
-        : source;
+  const normalizedSource = useMemo(
+    () => (
+      typeof source === 'string'
+        ? { uri: source, cache: 'force-cache' }
+        : source?.uri
+          ? { ...source, cache: source.cache || 'force-cache' }
+          : source
+    ),
+    [source],
+  );
+  const sourceKey = normalizedSource?.uri || JSON.stringify(normalizedSource || '');
+
+  useEffect(() => {
+    setFailed(false);
+  }, [sourceKey]);
 
   if (failed || !normalizedSource) {
     return <View style={style} />;

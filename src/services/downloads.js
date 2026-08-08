@@ -67,7 +67,7 @@ const normalizeDownloadUrl = (value) => {
   const raw = String(value || '').trim();
   if (!raw) return '';
 
-  if (/^(https?:|content:|file:|data:)/i.test(raw)) return raw;
+  if (/^(https?:|content:|file:|data:|policybhandar:)/i.test(raw)) return raw;
   if (raw.startsWith('//')) return `https:${raw}`;
   if (raw.startsWith('/')) return `${BASE_URL.replace(/\/$/, '')}${raw}`;
 
@@ -332,6 +332,11 @@ const toBackendPayload = (details = {}, item = {}) => {
   const recipientType = cleanText(details.recipientType);
   const includeWatermark = wantsWatermark(details);
   const includeLogo = readBoolean(details.yourLogo, details.includeLogo, details.showLogo);
+  const includeLogoOverlay = readBoolean(
+    details.logoOverlay,
+    details.includeLogoOverlay,
+    details.showLogoOverlay,
+  );
   const includeCaption = readBoolean(details.socialCaption, details.showSocialCaption);
   const includeQrCode = readBoolean(details.qrCode, details.showQrCode);
   const fontColor = details.fontColor || '#111111';
@@ -348,6 +353,11 @@ const toBackendPayload = (details = {}, item = {}) => {
       'POLICYBHANDAR',
   );
   const outgoingLogoUrl = includeLogo ? userDetails.logoUrl : '';
+  const overlayLogoUrl = includeLogoOverlay
+    ? pickFirstUrl(details.logoOverlayUrl, details.overlayLogoUrl, details.logoUrl, userDetails.logoUrl)
+    : '';
+  const logoOverlayX = Number.isFinite(Number(details.logoOverlayX)) ? Number(details.logoOverlayX) : 0.06;
+  const logoOverlayY = Number.isFinite(Number(details.logoOverlayY)) ? Number(details.logoOverlayY) : 0.06;
 
   return {
     materialId: getMaterialId(item),
@@ -372,6 +382,13 @@ const toBackendPayload = (details = {}, item = {}) => {
     includeLogo,
     showLogo: includeLogo,
     yourLogo: includeLogo,
+    logoOverlay: includeLogoOverlay,
+    includeLogoOverlay,
+    showLogoOverlay: includeLogoOverlay,
+    logoOverlayUrl: overlayLogoUrl,
+    overlayLogoUrl,
+    logoOverlayX,
+    logoOverlayY,
     includeWatermark,
     watermark: includeWatermark,
     waterMark: includeWatermark,
@@ -442,6 +459,13 @@ const toDirectDownloadParams = (sourceUrl, materialId, payload) => ({
   includeLogo: payload.includeLogo,
   showLogo: payload.showLogo,
   yourLogo: payload.yourLogo,
+  logoOverlay: payload.logoOverlay,
+  includeLogoOverlay: payload.includeLogoOverlay,
+  showLogoOverlay: payload.showLogoOverlay,
+  logoOverlayUrl: payload.logoOverlayUrl,
+  overlayLogoUrl: payload.overlayLogoUrl,
+  logoOverlayX: payload.logoOverlayX,
+  logoOverlayY: payload.logoOverlayY,
   includeWatermark: payload.includeWatermark,
   watermark: payload.watermark,
   showWatermark: payload.showWatermark,
@@ -558,6 +582,13 @@ const getLocalComposerOptions = (details = {}, item = {}) => {
     generatedDate: payload.generatedDate,
     includeWatermark: payload.includeWatermark,
     includeLogo: payload.includeLogo,
+    logoOverlay: payload.logoOverlay,
+    includeLogoOverlay: payload.includeLogoOverlay,
+    showLogoOverlay: payload.showLogoOverlay,
+    logoOverlayUrl: payload.logoOverlayUrl,
+    overlayLogoUrl: payload.overlayLogoUrl,
+    logoOverlayX: payload.logoOverlayX,
+    logoOverlayY: payload.logoOverlayY,
     includeSocialCaption: payload.includeSocialCaption,
     includeQrCode: payload.includeQrCode,
     advisorName: payload.advisorName,
@@ -574,6 +605,7 @@ const hasLocalCustomizations = (options = {}) =>
     options.recipientName ||
     options.includeWatermark ||
     options.includeLogo ||
+    options.includeLogoOverlay ||
     options.includeSocialCaption ||
     options.includeQrCode
   );

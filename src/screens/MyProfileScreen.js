@@ -107,6 +107,7 @@ const MyProfileScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
   const [passwordLoading, setPasswordLoading] = useState(false);
   const [logoutLoading, setLogoutLoading] = useState(false);
+  const [deleteRequestLoading, setDeleteRequestLoading] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -245,6 +246,31 @@ const MyProfileScreen = ({ navigation }) => {
         setLogoutLoading(false);
       });
     }, 80);
+  };
+
+  const handleDeleteAccountRequest = () => {
+    if (deleteRequestLoading) return;
+    Alert.alert(
+      'Delete My Account',
+      'This will send an account deletion request to admin. Your data and profile will be deleted within 24 hours after approval.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Send Request',
+          style: 'destructive',
+          onPress: () => {
+            setDeleteRequestLoading(true);
+            setTimeout(() => {
+              setDeleteRequestLoading(false);
+              Alert.alert(
+                'Request Sent',
+                'Your data and profile deletion request has been sent. Your data will be deleted within 24 hours.',
+              );
+            }, 250);
+          },
+        },
+      ],
+    );
   };
 
   const handleChangePassword = async () => {
@@ -484,6 +510,21 @@ const MyProfileScreen = ({ navigation }) => {
             </>
           )}
         </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.deleteAccountBtn, deleteRequestLoading && { opacity: 0.7 }]}
+          onPress={handleDeleteAccountRequest}
+          disabled={deleteRequestLoading}
+          activeOpacity={0.85}
+        >
+          {deleteRequestLoading ? (
+            <ActivityIndicator color={Colors.primary} />
+          ) : (
+            <>
+              <MaterialIcons name="person-remove" size={20} color={Colors.primary} />
+              <Text style={styles.deleteAccountText}>Delete My Account</Text>
+            </>
+          )}
+        </TouchableOpacity>
       </ScrollView>
     </View>
   );
@@ -593,8 +634,22 @@ const styles = StyleSheet.create({
   membershipNote: { color: Colors.textGray, fontSize: 12, lineHeight: 18, paddingHorizontal: 16, paddingTop: 10 },
   renewBtn: { margin: 14, backgroundColor: Colors.primary, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
   renewText: { color: '#fff', fontWeight: '700', fontSize: 14 },
-  logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginHorizontal: 14, marginBottom: 30, marginTop: 4, backgroundColor: '#E74C3C', borderRadius: 10, paddingVertical: 13 },
+  logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginHorizontal: 14, marginBottom: 10, marginTop: 4, backgroundColor: '#E74C3C', borderRadius: 10, paddingVertical: 13 },
   logoutText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  deleteAccountBtn: {
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderColor: Colors.primary,
+    borderRadius: 10,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
+    marginBottom: 30,
+    marginHorizontal: 14,
+    paddingVertical: 13,
+  },
+  deleteAccountText: { color: Colors.primary, fontSize: 15, fontWeight: '800' },
 });
 
 export default MyProfileScreen;

@@ -1,15 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Platform, requireNativeComponent, StyleSheet, Text, View } from 'react-native';
 import { Colors } from '../theme/colors';
+import FastImage from './FastImage';
 
 const NativeVideoView =
   Platform.OS === 'android' || Platform.OS === 'ios'
     ? requireNativeComponent('PolicyBhandarVideoView')
     : null;
 
-const NativeVideoPlayer = ({ source, style, thumbnailMode = false }) => {
+const NativeVideoPlayer = ({ source, style, thumbnailMode = false, poster = null, posterResizeMode = 'contain' }) => {
   const [loading, setLoading] = useState(!!source && !thumbnailMode);
   const [error, setError] = useState(false);
+  const posterSource = typeof poster === 'string' ? { uri: poster } : poster;
 
   useEffect(() => {
     setError(false);
@@ -34,6 +36,14 @@ const NativeVideoPlayer = ({ source, style, thumbnailMode = false }) => {
 
   return (
     <View style={[styles.wrapper, style]}>
+      {posterSource && loading ? (
+        <FastImage
+          source={posterSource}
+          style={StyleSheet.absoluteFill}
+          resizeMode={posterResizeMode}
+          priority="high"
+        />
+      ) : null}
       <NativeVideoView
         thumbnailMode={thumbnailMode}
         source={source}

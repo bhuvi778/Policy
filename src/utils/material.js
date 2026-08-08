@@ -95,6 +95,11 @@ const isPresentationMetadata = (item = {}, sectionTitle = '') => {
   return text.includes('ppt') || text.includes('presentation') || text.includes('powerpoint');
 };
 
+const isPdfMetadata = (item = {}, sectionTitle = '') => {
+  const text = `${getItemText(item)} ${sectionTitle || ''}`.toLowerCase();
+  return text.includes('pdf') || text.includes('brochure');
+};
+
 const firstUrlWithExtension = (extensions = [], ...candidates) => {
   for (const candidate of candidates.flat().filter(Boolean)) {
     const url = readAssetUrl(candidate);
@@ -255,35 +260,70 @@ export const getThumbnailSource = (item = {}) => {
     item.thumbnail,
     item.thumbnailUrl,
     item.thumbnail_url,
+    item.thumbnailImage,
+    item.thumbnail_image,
+    item.thumbnailImageUrl,
+    item.thumbnail_image_url,
     item.thumb,
+    item.thumbUrl,
+    item.thumb_url,
+    item.videoThumbnail,
+    item.video_thumbnail,
+    item.videoThumbnailUrl,
+    item.video_thumbnail_url,
     item.poster,
     item.posterUrl,
     item.poster_url,
+    item.posterImage,
+    item.posterImageUrl,
     item.cover,
+    item.coverUrl,
+    item.cover_url,
     item.coverImage,
     item.coverImageUrl,
     item.previewImage,
     item.previewImageUrl,
     item.preview_image,
+    item.previewUrl,
+    item.preview_url,
     item.image,
     item.imageUrl,
     item.raw?.thumbnail,
     item.raw?.thumbnailUrl,
     item.raw?.thumbnail_url,
+    item.raw?.thumbnailImage,
+    item.raw?.thumbnail_image,
+    item.raw?.thumbnailImageUrl,
+    item.raw?.thumbnail_image_url,
     item.raw?.thumb,
+    item.raw?.thumbUrl,
+    item.raw?.thumb_url,
+    item.raw?.videoThumbnail,
+    item.raw?.video_thumbnail,
+    item.raw?.videoThumbnailUrl,
+    item.raw?.video_thumbnail_url,
     item.raw?.poster,
     item.raw?.posterUrl,
+    item.raw?.posterImage,
+    item.raw?.posterImageUrl,
     item.raw?.cover,
+    item.raw?.coverUrl,
+    item.raw?.cover_url,
     item.raw?.coverImage,
     item.raw?.coverImageUrl,
     item.raw?.previewImage,
     item.raw?.previewImageUrl,
     item.raw?.preview_image,
+    item.raw?.previewUrl,
+    item.raw?.preview_url,
     item.file?.thumbnail,
     item.file?.thumbnailUrl,
+    item.file?.thumbnailImage,
     item.file?.poster,
     item.media?.thumbnail,
     item.media?.thumbnailUrl,
+    item.media?.thumbnailImage,
+    item.media?.videoThumbnail,
     item.media?.poster,
     item.output?.thumbnail,
     item.output?.thumbnailUrl,
@@ -299,6 +339,46 @@ export const getThumbnailSource = (item = {}) => {
   const image = item.image || item.raw?.image;
   if (typeof image === 'string' && isVideoUrl(image)) return null;
   return image || null;
+};
+
+export const getMaterialKind = (item = {}, sectionTitle = '') => {
+  const mediaUrl = getMediaUrl(item);
+  const downloadUrl = getDownloadSourceUrl(item);
+  const url = mediaUrl || downloadUrl;
+  const typeText = `${getItemText(item)} ${sectionTitle || ''} ${url || ''}`.toLowerCase();
+
+  if (
+    isVideoUrl(url) ||
+    typeText.includes('reel') ||
+    typeText.includes('video') ||
+    typeText.includes('story')
+  ) {
+    return 'video';
+  }
+  if (isPresentationMetadata(item, sectionTitle) || /\.(ppt|pptx)(\?|#|$)/i.test(url || '')) {
+    return 'ppt';
+  }
+  if (isPdfMetadata(item, sectionTitle) || /\.pdf(\?|#|$)/i.test(url || '')) {
+    return 'pdf';
+  }
+  if (isDocumentUrl(url)) return 'doc';
+  return 'image';
+};
+
+export const getMaterialKindMeta = (item = {}, sectionTitle = '') => {
+  const kind = getMaterialKind(item, sectionTitle);
+  switch (kind) {
+    case 'video':
+      return { kind, label: 'VIDEO', icon: 'play-circle-outline', color: '#C0392B' };
+    case 'ppt':
+      return { kind, label: 'PPT', icon: 'slideshow', color: '#D35400' };
+    case 'pdf':
+      return { kind, label: 'PDF', icon: 'picture-as-pdf', color: '#C0392B' };
+    case 'doc':
+      return { kind, label: 'DOC', icon: 'description', color: '#34495E' };
+    default:
+      return { kind, label: 'IMAGE', icon: 'image', color: '#2E7D32' };
+  }
 };
 
 export const isMediaItem = (item = {}, sectionTitle = '') => {

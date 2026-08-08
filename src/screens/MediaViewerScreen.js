@@ -245,7 +245,7 @@ const MediaViewerScreen = ({ route, navigation }) => {
 
       <View style={styles.playerWrap}>
         {shouldPlayVideo && isVideoUrl(mediaUrl) ? (
-          <NativeVideoPlayer source={mediaUrl} style={styles.player} />
+          <NativeVideoPlayer source={mediaUrl} poster={thumbnail} style={styles.player} />
         ) : imageSource ? (
           <FastImage
             source={typeof imageSource === 'string' ? { uri: imageSource } : imageSource}
@@ -343,7 +343,7 @@ const MediaViewerScreen = ({ route, navigation }) => {
 
             <View style={styles.generatedPreviewBox}>
               {preparedPreviewUrl && preparedIsVideo && !preparedIsDocument ? (
-                <NativeVideoPlayer source={preparedPreviewUrl} style={styles.generatedPreviewMedia} />
+                <NativeVideoPlayer source={preparedPreviewUrl} poster={thumbnail} style={styles.generatedPreviewMedia} />
               ) : preparedPreviewUrl && !preparedIsDocument ? (
                 <FastImage source={{ uri: preparedPreviewUrl }} style={styles.generatedPreviewMedia} resizeMode="contain" priority="high" />
               ) : preparedIsDocument ? (

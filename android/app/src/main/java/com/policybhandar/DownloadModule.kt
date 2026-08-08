@@ -47,6 +47,7 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
     val fontColor: String = "",
     val includeWatermark: Boolean = false,
     val includeLogo: Boolean = false,
+    val includeLogoOverlay: Boolean = false,
     val includeSocialCaption: Boolean = false,
     val includeQrCode: Boolean = false,
     val advisorName: String = "",
@@ -54,6 +55,9 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
     val advisorMobile: String = "",
     val advisorEmail: String = "",
     val logoUrl: String = "",
+    val logoOverlayUrl: String = "",
+    val logoOverlayX: Double = 0.06,
+    val logoOverlayY: Double = 0.06,
     val qrCodeUrl: String = "",
     val qrPosition: String = "right",
     val generatedDate: String = ""
@@ -200,6 +204,7 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
       fontColor = readString(options, "fontColor"),
       includeWatermark = readBoolean(options, "includeWatermark") || readBoolean(options, "watermark") || readBoolean(options, "waterMark") || !legacyWatermarkText.isNullOrBlank(),
       includeLogo = readBoolean(options, "includeLogo") || readBoolean(options, "showLogo") || readBoolean(options, "yourLogo"),
+      includeLogoOverlay = readBoolean(options, "includeLogoOverlay") || readBoolean(options, "logoOverlay") || readBoolean(options, "showLogoOverlay"),
       includeSocialCaption = readBoolean(options, "includeSocialCaption") || readBoolean(options, "showSocialCaption") || readBoolean(options, "socialCaption"),
       includeQrCode = readBoolean(options, "includeQrCode") || readBoolean(options, "showQrCode") || readBoolean(options, "qrCode"),
       advisorName = readString(options, "advisorName"),
@@ -230,6 +235,12 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
         readString(options, "image"),
         readString(options, "imageUrl")
       ),
+      logoOverlayUrl = firstNonBlank(
+        readString(options, "logoOverlayUrl"),
+        readString(options, "overlayLogoUrl")
+      ),
+      logoOverlayX = readDouble(options, "logoOverlayX", readDouble(options, "logoX", 0.06)),
+      logoOverlayY = readDouble(options, "logoOverlayY", readDouble(options, "logoY", 0.06)),
       qrCodeUrl = readString(options, "qrCodeUrl"),
       qrPosition = readString(options, "qrPosition")
         .ifBlank { readString(options, "qrCodePosition") }
@@ -256,6 +267,16 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
       ReadableType.String -> options.getString(key)?.equals("true", ignoreCase = true) == true
       ReadableType.Number -> options.getDouble(key) != 0.0
       else -> false
+    }
+  }
+
+  private fun readDouble(options: ReadableMap?, key: String, fallback: Double): Double {
+    if (options == null || !options.hasKey(key) || options.isNull(key)) return fallback
+    return when (options.getType(key)) {
+      ReadableType.Number -> options.getDouble(key)
+      ReadableType.String -> options.getString(key)?.toDoubleOrNull() ?: fallback
+      ReadableType.Boolean -> if (options.getBoolean(key)) 1.0 else 0.0
+      else -> fallback
     }
   }
 
@@ -428,6 +449,10 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
       canvas.drawBitmap(source, 0f, 0f, null)
     }
 
+    if (options.includeLogoOverlay) {
+      drawTemplateLogoOverlay(canvas, source.width, source.height, options)
+    }
+
     if (hasFooter) {
       if (appendQrFooter) {
         drawQrAppendFooter(canvas, source.width, source.height, cardHeight.toFloat(), options)
@@ -437,6 +462,37 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
     }
 
     return result
+  }
+
+  private fun drawTemplateLogoOverlay(canvas: Canvas, width: Int, imageHeight: Int, options: CustomizationOptions) {
+    val rawLogoUrl = options.logoOverlayUrl.ifBlank { options.logoUrl }
+    val logoBitmap = loadOptionalBitmap(rawLogoUrl) ?: return
+    try {
+      val minSide = min(width, imageHeight).toFloat()
+      val size = (minSide * 0.16f).coerceIn(52f, minSide * 0.28f)
+      val pad = (size * 0.11f).coerceIn(5f, 12f)
+      val maxX = max(0f, width - size)
+      val maxY = max(0f, imageHeight - size)
+      val x = (options.logoOverlayX.toFloat().coerceIn(0f, 1f) * maxX).coerceIn(0f, maxX)
+      val y = (options.logoOverlayY.toFloat().coerceIn(0f, 1f) * maxY).coerceIn(0f, maxY)
+      val rect = RectF(x, y, x + size, y + size)
+      val corner = (size * 0.13f).coerceIn(8f, 18f)
+
+      val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(238, 255, 255, 255)
+        setShadowLayer(max(3f, size * 0.06f), 0f, size * 0.025f, Color.argb(55, 0, 0, 0))
+      }
+      canvas.drawRoundRect(rect, corner, corner, bgPaint)
+      Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(168, 85, 247)
+        style = Paint.Style.STROKE
+        strokeWidth = max(2f, size * 0.025f)
+        canvas.drawRoundRect(rect, corner, corner, this)
+      }
+      drawBitmapFit(canvas, logoBitmap, rect, pad)
+    } finally {
+      if (!logoBitmap.isRecycled) logoBitmap.recycle()
+    }
   }
 
   private fun drawQrAppendFooter(canvas: Canvas, width: Int, imageHeight: Int, footerHeight: Float, options: CustomizationOptions) {
@@ -839,6 +895,18 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
     if (raw.isBlank()) return null
     return try {
       when {
+        raw.equals("policybhandar://logo", ignoreCase = true) -> {
+          val resourceId = reactContext.resources.getIdentifier(
+            "src_assets_images_policybhandar_logo",
+            "drawable",
+            reactContext.packageName
+          ).takeIf { it != 0 } ?: reactContext.resources.getIdentifier(
+            "splashscreen_logo",
+            "drawable",
+            reactContext.packageName
+          )
+          if (resourceId != 0) BitmapFactory.decodeResource(reactContext.resources, resourceId) else null
+        }
         raw.startsWith("http://", ignoreCase = true) || raw.startsWith("https://", ignoreCase = true) -> {
           loadBitmap(raw)
         }
