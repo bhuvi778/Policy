@@ -127,6 +127,45 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun shareFileToApp(
+    url: String,
+    fileName: String?,
+    mimeType: String?,
+    message: String?,
+    targetApp: String?,
+    promise: Promise
+  ) {
+    Thread {
+      try {
+        if (url.isBlank()) {
+          promise.reject("SHARE_URL_MISSING", "Share URL is missing.")
+          return@Thread
+        }
+
+        val resolvedMime = resolveMimeType(mimeType, url)
+        val safeName = safeFileName(fileName, resolvedMime, url)
+        val shareUri = resolveShareUri(url, safeName, resolvedMime)
+
+        reactContext.runOnUiQueueThread {
+          try {
+            launchTargetShareIntent(shareUri, resolvedMime, message.orEmpty(), targetApp.orEmpty())
+            val result = Arguments.createMap()
+            result.putString("uri", shareUri.toString())
+            result.putString("filename", safeName)
+            result.putString("mimeType", resolvedMime)
+            result.putString("targetApp", targetApp.orEmpty())
+            promise.resolve(result)
+          } catch (error: Exception) {
+            promise.reject("SHARE_FAILED", error.message, error)
+          }
+        }
+      } catch (error: Exception) {
+        promise.reject("SHARE_FAILED", error.message, error)
+      }
+    }.start()
+  }
+
+  @ReactMethod
   fun downloadCustomizedImage(
     url: String,
     fileName: String?,
@@ -406,6 +445,41 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
         } catch (_: SecurityException) {
           // Try the next WhatsApp package, then fall back to the chooser below.
         }
+      }
+    }
+
+    val chooser = Intent.createChooser(baseIntent, "Share with").apply {
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    reactContext.startActivity(chooser)
+  }
+
+  private fun launchTargetShareIntent(uri: Uri, mimeType: String, message: String, targetApp: String) {
+    val baseIntent = Intent(Intent.ACTION_SEND).apply {
+      type = mimeType
+      putExtra(Intent.EXTRA_STREAM, uri)
+      if (message.isNotBlank()) putExtra(Intent.EXTRA_TEXT, message)
+      clipData = ClipData.newUri(reactContext.contentResolver, "PolicyBhandar", uri)
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+
+    val packages = when (targetApp.lowercase()) {
+      "whatsapp" -> listOf("com.whatsapp", "com.whatsapp.w4b")
+      "facebook" -> listOf("com.facebook.katana", "com.facebook.lite")
+      "instagram" -> listOf("com.instagram.android")
+      else -> emptyList()
+    }
+
+    for (packageName in packages) {
+      try {
+        val intent = Intent(baseIntent).setPackage(packageName)
+        reactContext.startActivity(intent)
+        return
+      } catch (_: ActivityNotFoundException) {
+        // Fall back to the next package or the system chooser below.
+      } catch (_: SecurityException) {
+        // Fall back to the next package or the system chooser below.
       }
     }
 

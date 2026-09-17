@@ -1,15 +1,15 @@
 import Storage from './storage';
-import { getMaterialCategories, getMaterialSubcategories } from './api';
+import { getAllMaterialSubcategories, getMaterialCategories, getMaterialSubcategories } from './api';
 import serviceTreeSnapshot from '../data/materialServiceTreeSnapshot.json';
 
-const CACHE_KEY = '@policybhandar_material_service_tree_v11';
+const CACHE_KEY = '@policybhandar_material_service_tree_v15';
 const LEGACY_CACHE_KEYS = [];
 let serviceTreeMemory = null;
 let serviceTreeMemorySavedAt = 0;
 let serviceTreePromise = null;
 const SERVICE_TREE_TIMEOUT_MS = 7000;
-const SERVICE_TREE_CACHE_TTL_MS = 5 * 60 * 1000;
-const SERVICE_TREE_STALE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const SERVICE_TREE_CACHE_TTL_MS = 15 * 60 * 1000;
+const SERVICE_TREE_STALE_TTL_MS = 24 * 60 * 60 * 1000;
 
 const DEFAULT_SERVICE_TREE = [
   {
@@ -241,6 +241,17 @@ const unwrapList = (payload) => {
 
 const getId = (value) => String(value?._id || value?.id || '');
 
+const readId = (value) => {
+  if (!value) return '';
+  if (typeof value === 'object') return String(value._id || value.id || value.value || '');
+  return String(value || '');
+};
+
+const freshParams = () => ({
+  fresh: Date.now(),
+  cacheBust: Math.random().toString(36).slice(2),
+});
+
 const getParentId = (value) => {
   const parent =
     value?.parentSubcategoryId ??
@@ -254,6 +265,14 @@ const getParentId = (value) => {
   if (parent === undefined || parent === null || parent === '') return '';
   return typeof parent === 'object' ? getId(parent) : String(parent);
 };
+
+const getCategoryId = (subcategory = {}) =>
+  readId(
+    subcategory.categoryId ||
+    subcategory.category ||
+    subcategory.materialCategoryId ||
+    subcategory.materialCategory,
+  );
 
 const buildSubcategoryTree = (subcategories = []) => {
   const byParent = new Map();
@@ -331,8 +350,14 @@ export const fetchMaterialServiceTree = async ({ onPartial, timeout = 9000, forc
   if (cached.length) onPartial?.(cached.map((group) => ({ ...group, loading: false })));
 
   serviceTreePromise = (async () => {
+    const requestOptions = {
+      timeout,
+      token: null,
+      cache: !forceRefresh,
+      ...(forceRefresh ? { params: freshParams() } : {}),
+    };
     const categoryResponse = await withHardTimeout(
-      getMaterialCategories({ timeout, token: null, cache: false, params: { fresh: Date.now() } }),
+      getMaterialCategories(requestOptions),
       timeout + 1000,
     );
     const categories = unwrapList(categoryResponse.data);
@@ -344,29 +369,54 @@ export const fetchMaterialServiceTree = async ({ onPartial, timeout = 9000, forc
       loading: true,
     }));
 
-    await Promise.all(categories.map(async (category) => {
-      const categoryId = getId(category);
-      let subcategories = [];
-      try {
-        const response = await withHardTimeout(
-          getMaterialSubcategories(categoryId, { timeout, token: null, cache: false, params: { fresh: Date.now() } }),
-          timeout + 1000,
-        );
-        subcategories = unwrapList(response.data);
-      } catch (_) {}
+    let allSubcategories = [];
+    try {
+      const allResponse = await withHardTimeout(
+        getAllMaterialSubcategories(requestOptions),
+        timeout + 1000,
+      );
+      allSubcategories = unwrapList(allResponse.data);
+    } catch (_) {
+      allSubcategories = [];
+    }
 
-      groups = groups.map((group) => (
-        getId(group.category) === categoryId
-          ? {
-            ...group,
-            subcategories,
-            tree: buildSubcategoryTree(subcategories),
-            loading: false,
-          }
-          : group
-      ));
+    if (allSubcategories.length) {
+      groups = groups.map((group) => {
+        const categoryId = getId(group.category);
+        const subcategories = allSubcategories.filter((subcategory) => getCategoryId(subcategory) === categoryId);
+        return {
+          ...group,
+          subcategories,
+          tree: buildSubcategoryTree(subcategories),
+          loading: false,
+        };
+      });
       onPartial?.(groups);
-    }));
+    } else {
+      await Promise.all(categories.map(async (category) => {
+        const categoryId = getId(category);
+        let subcategories = [];
+        try {
+          const response = await withHardTimeout(
+            getMaterialSubcategories(categoryId, requestOptions),
+            timeout + 1000,
+          );
+          subcategories = unwrapList(response.data);
+        } catch (_) {}
+
+        groups = groups.map((group) => (
+          getId(group.category) === categoryId
+            ? {
+              ...group,
+              subcategories,
+              tree: buildSubcategoryTree(subcategories),
+              loading: false,
+            }
+            : group
+        ));
+        onPartial?.(groups);
+      }));
+    }
 
     const finalGroups = sanitizeGroups(groups).map((group) => ({ ...group, loading: false }));
     serviceTreeMemory = finalGroups;

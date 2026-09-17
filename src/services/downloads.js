@@ -748,6 +748,27 @@ export const shareFileToWhatsApp = async (file = {}, message = '', whatsappOnly 
   });
 };
 
+export const shareFileToSocialApp = async (file = {}, message = '', targetApp = '') => {
+  const url = normalizeDownloadUrl(file.url || file.contentUri || file.fileUri || file.uri || '');
+  if (!url) {
+    throw new Error('Share file URL is not available.');
+  }
+
+  const filename = file.filename || getDownloadFilename(file.item || {}, url);
+  const mimeType = file.mimeType || getMimeType(filename || url);
+  const target = String(targetApp || '').toLowerCase();
+
+  if (Platform.OS === 'android' && PolicyBhandarDownloader?.shareFileToApp) {
+    return PolicyBhandarDownloader.shareFileToApp(url, filename, mimeType, message, target);
+  }
+
+  if (target === 'whatsapp') {
+    return shareFileToWhatsApp(file, message, true);
+  }
+
+  return shareFileToWhatsApp(file, message, false);
+};
+
 export const downloadPreparedFileToDevice = async (file = {}, item = {}, user = {}) => {
   await assertCanDownload(user);
 

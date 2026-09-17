@@ -10,13 +10,13 @@ import { loadCachedMaterialServiceTree } from './materialServiceTree';
 import { isImageUrl, isVideoUrl } from '../utils/material';
 import templateSeedCatalog from '../data/templateSeedCatalog.json';
 
-const HOME_REQUEST_TIMEOUT_MS = 4500;
+const HOME_REQUEST_TIMEOUT_MS = 9000;
 const HOME_BATCH_LIMIT = 48;
 const HOME_ROLE_PAGE_LIMIT = 160;
 const HOME_SCOPED_PAGE_LIMIT = 160;
-const HOME_SCOPED_MAX_PAGES = 4;
-const HOME_SCOPED_MAX_DIRECT_QUERIES = 64;
-const HOME_SCOPED_DIRECT_QUERY_CONCURRENCY = 6;
+const HOME_SCOPED_MAX_PAGES = 3;
+const HOME_SCOPED_MAX_DIRECT_QUERIES = 24;
+const HOME_SCOPED_DIRECT_QUERY_CONCURRENCY = 3;
 const HOME_SECTION_LIMIT = 16;
 const HOME_BANNER_LIMIT = 5;
 const HOME_MEDIA_LIMIT = 80;
@@ -27,9 +27,9 @@ const SEED_SUCCESS_FLAG = '@policybhandar_material_seed_success';
 const SEED_TAG = 'policybhandar-seed';
 const HOME_CACHE_KEY = '@policybhandar_home_sections_cache_v1';
 const HOME_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const HOME_CACHE_SCHEMA = 16;
-const CATEGORY_MAP_CACHE_KEY = '@policybhandar_material_taxonomy_cache_v4';
-const CATEGORY_MAP_CACHE_SCHEMA = 4;
+const HOME_CACHE_SCHEMA = 19;
+const CATEGORY_MAP_CACHE_KEY = '@policybhandar_material_taxonomy_cache_v7';
+const CATEGORY_MAP_CACHE_SCHEMA = 7;
 const homeSectionsMemoryCache = new Map();
 const COLORS = [
   '#B71C1C',
@@ -45,6 +45,11 @@ const COLORS = [
 ];
 
 const cleanText = (value = '') => String(value || '').trim();
+
+const freshParams = () => ({
+  fresh: Date.now(),
+  cacheBust: Math.random().toString(36).slice(2),
+});
 
 const readIdValue = (value) => {
   if (!value) return '';
@@ -749,23 +754,30 @@ export const normalizeMaterialsForUser = async (payload, section, user = {}) => 
 const matchesSectionKeyword = (text, matches = []) =>
   matches.some((key) => text.includes(key));
 
-const extractCategoryMaps = async () => {
+const extractCategoryMaps = async (options = {}) => {
   const now = Date.now();
-  if (categoryMapCache.fetchedAt && now - categoryMapCache.fetchedAt < CATEGORY_MAP_CACHE_TTL_MS) {
+  const forceFresh = !!options.forceFresh;
+  if (!forceFresh && categoryMapCache.fetchedAt && now - categoryMapCache.fetchedAt < CATEGORY_MAP_CACHE_TTL_MS) {
     return categoryMapCache;
   }
 
-  const cachedTaxonomy = await loadCachedCategoryMap({ allowStale: false });
-  if (cachedTaxonomy) {
+  const cachedTaxonomy = forceFresh ? null : await loadCachedCategoryMap({ allowStale: false });
+  if (!forceFresh && cachedTaxonomy) {
     return applyCategoryMap(cachedTaxonomy);
   }
 
-  const staleTaxonomy = await loadCachedCategoryMap({ allowStale: true });
+  const staleTaxonomy = forceFresh ? null : await loadCachedCategoryMap({ allowStale: true });
   if (staleTaxonomy) {
     applyCategoryMap(staleTaxonomy);
   }
 
-  const categories = await getMaterialCategories({ token: null, timeout: 4500 })
+  const taxonomyRequestOptions = {
+    token: null,
+    timeout: 9000,
+    cache: !forceFresh,
+    ...(forceFresh ? { params: freshParams() } : {}),
+  };
+  const categories = await getMaterialCategories(taxonomyRequestOptions)
     .then((response) => unwrapList(response.data))
     .catch(() => []);
 
@@ -789,7 +801,7 @@ const extractCategoryMaps = async () => {
   const subcategoryCategories = {};
   const subcategoryOrder = {};
   const subcategoryQueries = categoryIds.map((id) =>
-    getMaterialSubcategories(id, { token: null, timeout: 4500 })
+    getMaterialSubcategories(id, taxonomyRequestOptions)
       .then((response) => {
         const items = unwrapList(response.data);
         items.forEach((subcategory, index) => {
@@ -857,6 +869,31 @@ const getDescendantSubcategoryIds = (subcategoryId = '', taxonomy = categoryMapC
   }
 
   return Array.from(result);
+};
+
+const sortSubcategoryIdsByBackendOrder = (ids = [], taxonomy = categoryMapCache) =>
+  Array.from(new Set(ids.map(cleanText).filter(Boolean))).sort((left, right) => {
+    const leftOrder = Number.isFinite(Number(taxonomy.subcategoryOrder?.[left]))
+      ? Number(taxonomy.subcategoryOrder[left])
+      : 999999;
+    const rightOrder = Number.isFinite(Number(taxonomy.subcategoryOrder?.[right]))
+      ? Number(taxonomy.subcategoryOrder[right])
+      : 999999;
+    return leftOrder - rightOrder;
+  });
+
+const getOrderedDescendantSubcategoryIds = (subcategoryId = '', taxonomy = categoryMapCache) =>
+  sortSubcategoryIdsByBackendOrder(getDescendantSubcategoryIds(subcategoryId, taxonomy), taxonomy);
+
+const getCategorySubcategoryIds = (categoryId = '', taxonomy = categoryMapCache, { rootsOnly = false } = {}) => {
+  const selectedCategoryId = cleanText(categoryId);
+  if (!selectedCategoryId) return [];
+  const ids = Object.keys(taxonomy.subcategoryNames || taxonomy.subcategories || {})
+    .filter((id) => cleanText(taxonomy.subcategoryCategories?.[id]) === selectedCategoryId);
+  const filtered = rootsOnly
+    ? ids.filter((id) => !cleanText(taxonomy.subcategoryParents?.[id]))
+    : ids;
+  return sortSubcategoryIdsByBackendOrder(filtered, taxonomy);
 };
 
 const getRoleCategoryId = (role = '', taxonomy = categoryMapCache) => {
@@ -1168,24 +1205,27 @@ const getBannerGroupTitle = (item = {}, normalizedItem = {}, taxonomy = category
   );
 };
 
-const addBannerToGroups = (groups, groupIndex, item, normalizedItem, taxonomy = categoryMapCache) => {
+const addBannerToGroups = (groups, groupIndex, item, normalizedItem, taxonomy = categoryMapCache, groupingScope = {}) => {
   const raw = item.raw && item.raw !== item ? item.raw : {};
   const subcategoryId = getItemIdValue(item.subcategoryId || raw.subcategoryId || normalizedItem.subcategoryId);
   const categoryId = getItemIdValue(item.categoryId || raw.categoryId || normalizedItem.categoryId);
+  const scopedGroupId = resolveScopedGroupSubcategoryId(subcategoryId, categoryId, taxonomy, groupingScope);
+  const effectiveSubcategoryId = scopedGroupId || subcategoryId;
   const title =
+    cleanText(taxonomy.subcategoryNames?.[effectiveSubcategoryId]) ||
     getBannerGroupTitle(item, normalizedItem, taxonomy) ||
     cleanText(normalizedItem?.section) ||
     cleanText(normalizedItem?.title) ||
     'Templates';
-  const groupKey = subcategoryId || categoryId || normalizeName(title) || 'banners';
+  const groupKey = effectiveSubcategoryId || categoryId || normalizeName(title) || 'banners';
 
   if (!groupIndex.has(groupKey)) {
     const group = {
       id: `banner-group-${groupKey}`,
       title,
       data: [],
-      sortOrder: Number.isFinite(Number(taxonomy.subcategoryOrder?.[subcategoryId]))
-        ? Number(taxonomy.subcategoryOrder[subcategoryId])
+      sortOrder: Number.isFinite(Number(taxonomy.subcategoryOrder?.[effectiveSubcategoryId]))
+        ? Number(taxonomy.subcategoryOrder[effectiveSubcategoryId])
         : 999999,
     };
     groupIndex.set(groupKey, group);
@@ -1202,13 +1242,71 @@ const addBannerToGroups = (groups, groupIndex, item, normalizedItem, taxonomy = 
   }
 };
 
-const addExpectedBannerGroups = (groups, groupIndex, parentSubcategoryId = '', taxonomy = categoryMapCache) => {
+const getOrderedScopeGroupIds = ({
+  parentSubcategoryId = '',
+  categoryId = '',
+  taxonomy = categoryMapCache,
+} = {}) => {
   const parentId = cleanText(parentSubcategoryId);
-  if (!parentId) return;
+  const selectedCategoryId = cleanText(categoryId);
 
-  const childIds = Array.isArray(taxonomy.subcategoryChildren?.[parentId])
-    ? taxonomy.subcategoryChildren[parentId]
-    : [];
+  const childIds = parentId
+    ? (Array.isArray(taxonomy.subcategoryChildren?.[parentId]) ? taxonomy.subcategoryChildren[parentId] : [])
+    : Object.keys(taxonomy.subcategoryNames || taxonomy.subcategories || {})
+      .filter((id) =>
+        cleanText(taxonomy.subcategoryCategories?.[id]) === selectedCategoryId &&
+        !cleanText(taxonomy.subcategoryParents?.[id])
+      );
+
+  return childIds
+    .map(cleanText)
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftOrder = Number.isFinite(Number(taxonomy.subcategoryOrder?.[left]))
+        ? Number(taxonomy.subcategoryOrder[left])
+        : 999999;
+      const rightOrder = Number.isFinite(Number(taxonomy.subcategoryOrder?.[right]))
+        ? Number(taxonomy.subcategoryOrder[right])
+        : 999999;
+      return leftOrder - rightOrder;
+    });
+};
+
+const resolveScopedGroupSubcategoryId = (
+  itemSubcategoryId = '',
+  itemCategoryId = '',
+  taxonomy = categoryMapCache,
+  scope = {},
+) => {
+  const subcategoryId = cleanText(itemSubcategoryId);
+  const selectedParentId = cleanText(scope?.parentSubcategoryId);
+  const selectedCategoryId = cleanText(scope?.categoryId || itemCategoryId);
+  if (!subcategoryId) return '';
+
+  const lineage = getSubcategoryHierarchyMeta(subcategoryId, taxonomy).subcategoryLineageIds || [subcategoryId];
+  if (selectedParentId) {
+    if (subcategoryId === selectedParentId) return selectedParentId;
+    const childUnderParent = lineage.find((id) => cleanText(taxonomy.subcategoryParents?.[id]) === selectedParentId);
+    return childUnderParent || subcategoryId;
+  }
+
+  if (selectedCategoryId) {
+    const rootForCategory = [...lineage].reverse().find((id) =>
+      cleanText(taxonomy.subcategoryCategories?.[id]) === selectedCategoryId &&
+      !cleanText(taxonomy.subcategoryParents?.[id])
+    );
+    return rootForCategory || subcategoryId;
+  }
+
+  return subcategoryId;
+};
+
+const addExpectedBannerGroups = (groups, groupIndex, scope = {}, taxonomy = categoryMapCache) => {
+  const childIds = getOrderedScopeGroupIds({
+    parentSubcategoryId: scope?.parentSubcategoryId,
+    categoryId: scope?.categoryId,
+    taxonomy,
+  });
 
   childIds.forEach((childId, index) => {
     const groupKey = cleanText(childId);
@@ -1302,10 +1400,12 @@ const countBannerMaterials = (items = []) =>
     return image && (typeof image !== 'string' || isImageUrl(image));
   }).length;
 
-const fetchAllMaterials = async ({ fetchAll = false, minBannerItems = HOME_BANNER_LIMIT } = {}) => {
+const fetchAllMaterials = async ({ fetchAll = false, minBannerItems = HOME_BANNER_LIMIT, forceFresh = false } = {}) => {
+  const requestOptions = { timeout: HOME_REQUEST_TIMEOUT_MS, token: null, cache: !forceFresh };
+  const requestParams = forceFresh ? freshParams() : {};
   const [firstPage, reelPage] = await Promise.all([
-    getMaterials({ page: 1, limit: HOME_BATCH_LIMIT }, { timeout: HOME_REQUEST_TIMEOUT_MS, token: null }),
-    getMaterials({ type: 'Reel', page: 1, limit: HOME_MEDIA_LIMIT }, { timeout: HOME_REQUEST_TIMEOUT_MS, token: null })
+    getMaterials({ page: 1, limit: HOME_BATCH_LIMIT, ...requestParams }, requestOptions),
+    getMaterials({ type: 'Reel', page: 1, limit: HOME_MEDIA_LIMIT, ...requestParams }, requestOptions)
       .catch(() => null),
   ]);
   const payload = firstPage.data;
@@ -1331,7 +1431,7 @@ const fetchAllMaterials = async ({ fetchAll = false, minBannerItems = HOME_BANNE
 
   const remaining = [];
   for (let page = 2; page <= maxPages; page += 1) {
-    const response = await getMaterials({ page, limit: HOME_BATCH_LIMIT }, { timeout: HOME_REQUEST_TIMEOUT_MS, token: null })
+    const response = await getMaterials({ page, limit: HOME_BATCH_LIMIT, ...requestParams }, requestOptions)
       .then((res) => unwrapList(res.data))
       .catch(() => []);
     remaining.push(...response);
@@ -1346,7 +1446,10 @@ const fetchMaterialPagesForParams = async (params = {}, options = {}) => {
   const limit = options.limit || 180;
   const timeout = options.timeout || 6500;
   const maxPages = options.maxPages || 3;
-  const firstResponse = await getMaterials({ ...params, page: 1, limit }, { timeout, token: null });
+  const forceFresh = !!options.forceFresh;
+  const requestOptions = { timeout, token: null, cache: !forceFresh };
+  const requestParams = forceFresh ? freshParams() : {};
+  const firstResponse = await getMaterials({ ...params, page: 1, limit, ...requestParams }, requestOptions);
   const firstPayload = firstResponse.data;
   const firstList = unwrapList(firstPayload);
   const total = Number(firstPayload?.total || firstPayload?.count || firstList.length || 0);
@@ -1357,7 +1460,7 @@ const fetchMaterialPagesForParams = async (params = {}, options = {}) => {
 
   const rest = await Promise.all(
     Array.from({ length: pageLimit - 1 }, (_, index) => index + 2).map((page) =>
-      getMaterials({ ...params, page, limit }, { timeout, token: null })
+      getMaterials({ ...params, page, limit, ...requestParams }, requestOptions)
         .then((response) => unwrapList(response.data))
         .catch(() => []),
     ),
@@ -1399,6 +1502,10 @@ const buildSectionsFromMaterials = (items, fallbacks = {}, options = {}) => {
   const mediaLimit = options.mediaLimit || HOME_MEDIA_LIMIT;
   const groupItemLimit = options.groupItemLimit || HOME_GROUP_ITEM_LIMIT;
   const groupAllBySubcategory = !!options.groupAllBySubcategory;
+  const groupingScope = {
+    parentSubcategoryId: cleanText(options.expectedGroupParentId),
+    categoryId: cleanText(options.expectedGroupCategoryId),
+  };
   const bannerSeen = new Set();
   const bannerGroupIndex = new Map();
 
@@ -1429,7 +1536,7 @@ const buildSectionsFromMaterials = (items, fallbacks = {}, options = {}) => {
         });
       }
 
-      addBannerToGroups(sections.bannerGroups, bannerGroupIndex, item, normalizedTemplate, taxonomy);
+      addBannerToGroups(sections.bannerGroups, bannerGroupIndex, item, normalizedTemplate, taxonomy, groupingScope);
       continue;
     }
 
@@ -1444,12 +1551,12 @@ const buildSectionsFromMaterials = (items, fallbacks = {}, options = {}) => {
 
     if (groupAllBySubcategory) {
       const groupedItem = normalizeMaterial(item, sections.bannerGroups.length, 'bannerGroups', taxonomy);
-      addBannerToGroups(sections.bannerGroups, bannerGroupIndex, item, groupedItem, taxonomy);
+      addBannerToGroups(sections.bannerGroups, bannerGroupIndex, item, groupedItem, taxonomy, groupingScope);
     }
   }
 
   if (groupAllBySubcategory) {
-    addExpectedBannerGroups(sections.bannerGroups, bannerGroupIndex, options.expectedGroupParentId, taxonomy);
+    addExpectedBannerGroups(sections.bannerGroups, bannerGroupIndex, groupingScope, taxonomy);
   }
 
   Object.keys(sections).forEach((key) => {
@@ -1522,15 +1629,22 @@ const loadMaterialsForTaxonomy = async ({
   categoryId = '',
   subcategoryId = '',
   subcategoryIds = [],
+  querySubcategoryIds = [],
   title = '',
   role = '',
   user = {},
   limit = HOME_SCOPED_PAGE_LIMIT,
   maxPages = HOME_SCOPED_MAX_PAGES,
   maxDirectQueries = HOME_SCOPED_MAX_DIRECT_QUERIES,
+  forceFreshTaxonomy = false,
+  forceFreshMaterials = false,
 } = {}) => {
   const subcategoryIdList = Array.from(new Set([
     ...subcategoryIds,
+    subcategoryId,
+  ].map(cleanText).filter(Boolean)));
+  const querySubcategoryIdList = Array.from(new Set([
+    ...querySubcategoryIds,
     subcategoryId,
   ].map(cleanText).filter(Boolean)));
   const params = {
@@ -1540,24 +1654,24 @@ const loadMaterialsForTaxonomy = async ({
   };
 
   try {
-    const taxonomy = await extractCategoryMaps().catch(() => categoryMapCache);
-    const querySubcategoryIds = subcategoryIdList.length ? subcategoryIdList : [];
-    const directQueryIds = querySubcategoryIds.slice(0, maxDirectQueries);
-    const shouldFetchCategoryWide = !!categoryId && querySubcategoryIds.length > maxDirectQueries;
+    const taxonomy = await extractCategoryMaps({ forceFresh: forceFreshTaxonomy }).catch(() => categoryMapCache);
+    const materialQueryIds = querySubcategoryIdList.length ? querySubcategoryIdList : subcategoryIdList;
+    const directQueryIds = materialQueryIds.slice(0, maxDirectQueries);
+    const shouldFetchCategoryWide = !!categoryId && materialQueryIds.length > maxDirectQueries;
     const parentScopedResponse = subcategoryId
-      ? fetchMaterialPagesForParams({ ...params, subcategoryId }, { timeout: 6500, limit: Math.max(limit, 180), maxPages: Math.max(maxPages, 4) })
+      ? fetchMaterialPagesForParams({ ...params, subcategoryId }, { timeout: 6500, limit: Math.max(limit, 180), maxPages: Math.max(maxPages, 3), forceFresh: forceFreshMaterials })
         .catch(() => [])
       : Promise.resolve([]);
     const childScopedResponses = directQueryIds.length && !shouldFetchCategoryWide
       ? runInBatches(
         directQueryIds,
         HOME_SCOPED_DIRECT_QUERY_CONCURRENCY,
-        (id) => fetchMaterialPagesForParams({ ...params, subcategoryId: id }, { timeout: 6500, limit, maxPages })
+        (id) => fetchMaterialPagesForParams({ ...params, subcategoryId: id }, { timeout: 6500, limit, maxPages, forceFresh: forceFreshMaterials })
           .catch(() => []),
       )
       : Promise.resolve([]);
     const categoryWideResponse = categoryId
-      ? fetchMaterialPagesForParams(params, { timeout: 6500, limit: Math.max(limit, 240), maxPages: Math.max(maxPages, 5) })
+      ? fetchMaterialPagesForParams(params, { timeout: 6500, limit: Math.max(limit, 220), maxPages: Math.max(maxPages, 3), forceFresh: forceFreshMaterials })
         .catch(() => [])
       : Promise.resolve([]);
     const responses = await Promise.all([
@@ -1611,24 +1725,32 @@ export const loadHomeContent = async (fallbacks = {}, options = {}) => {
   }
 
   try {
-    const taxonomy = options.includeTaxonomy
-      ? await extractCategoryMaps().catch(() => categoryMapCache)
+    const taxonomy = options.includeTaxonomy || options.forceFreshTaxonomy
+      ? await extractCategoryMaps({ forceFresh: !!options.forceFreshTaxonomy }).catch(() => categoryMapCache)
       : categoryMapCache;
-    const selectedSubcategoryIds = selectedSubcategoryId
-      ? getDescendantSubcategoryIds(selectedSubcategoryId, taxonomy)
+    const selectedRootSubcategoryIds = selectedCategoryId && !selectedSubcategoryId
+      ? getCategorySubcategoryIds(selectedCategoryId, taxonomy, { rootsOnly: true })
       : [];
+    const selectedSubcategoryIds = selectedSubcategoryId
+      ? getOrderedDescendantSubcategoryIds(selectedSubcategoryId, taxonomy)
+      : selectedRootSubcategoryIds.length
+        ? selectedRootSubcategoryIds.flatMap((id) => getOrderedDescendantSubcategoryIds(id, taxonomy))
+        : [];
     const roleCategoryId = !hasScopedSelection && fetchAll ? getRoleCategoryId(role, taxonomy) : '';
     const directScopedMaterials = hasScopedSelection
       ? await loadMaterialsForTaxonomy({
         categoryId: selectedCategoryId,
         subcategoryId: selectedSubcategoryId,
         subcategoryIds: selectedSubcategoryIds,
+        querySubcategoryIds: selectedSubcategoryId ? selectedSubcategoryIds : selectedRootSubcategoryIds,
         title: 'Content',
         role,
       user: options.user || {},
       limit: options.scopedLimit || HOME_SCOPED_PAGE_LIMIT,
       maxPages: options.scopedMaxPages || HOME_SCOPED_MAX_PAGES,
       maxDirectQueries: options.maxDirectQueries || HOME_SCOPED_MAX_DIRECT_QUERIES,
+      forceFreshTaxonomy: !!options.forceFreshTaxonomy,
+      forceFreshMaterials: !!options.forceFreshMaterials,
     })
       : [];
     const materials = hasScopedSelection
@@ -1636,9 +1758,9 @@ export const loadHomeContent = async (fallbacks = {}, options = {}) => {
       : roleCategoryId
         ? await fetchMaterialPagesForParams(
           { categoryId: roleCategoryId },
-          { timeout: 5200, limit: HOME_ROLE_PAGE_LIMIT, maxPages: fetchAll ? 4 : 2 },
+          { timeout: 9000, limit: HOME_ROLE_PAGE_LIMIT, maxPages: fetchAll ? 8 : 4 },
         )
-        : await fetchAllMaterials({ fetchAll });
+        : await fetchAllMaterials({ fetchAll, forceFresh: !!options.forceFreshMaterials });
     const scopedMaterials = hasScopedSelection
       ? filterMaterialsForTaxonomyScope(materials, {
         categoryId: selectedCategoryId,
@@ -1655,6 +1777,7 @@ export const loadHomeContent = async (fallbacks = {}, options = {}) => {
       groupItemLimit: hasScopedSelection || roleCategoryId ? 2000 : undefined,
       groupAllBySubcategory: hasScopedSelection || !!roleCategoryId,
       expectedGroupParentId: selectedSubcategoryId,
+      expectedGroupCategoryId: selectedCategoryId || roleCategoryId,
     });
 
     if (Object.values(sections).some((items) => items.length > 0)) {
@@ -1697,7 +1820,33 @@ export const loadHomeContent = async (fallbacks = {}, options = {}) => {
 };
 
 export const invalidateHomeContentCache = async () => {
-  await Storage.multiRemove([HOME_CACHE_KEY, getHomeCacheKey('agent'), getHomeCacheKey('leader')]);
+  homeSectionsMemoryCache.clear();
+  categoryMapCache = {
+    fetchedAt: 0,
+    categories: {},
+    categoryNames: {},
+    subcategories: {},
+    subcategoryNames: {},
+    subcategoryParents: {},
+    subcategoryChildren: {},
+    subcategoryCategories: {},
+    subcategoryOrder: {},
+  };
+
+  const keys = await Storage.getAllKeys().catch(() => []);
+  const dynamicKeys = keys.filter((key) => (
+    String(key).startsWith(HOME_CACHE_KEY) ||
+    String(key).startsWith('@policybhandar_home_sections_cache_') ||
+    String(key).startsWith('@policybhandar_material_taxonomy_cache_') ||
+    String(key).startsWith('@policybhandar_material_service_tree_')
+  ));
+  await Storage.multiRemove(Array.from(new Set([
+    HOME_CACHE_KEY,
+    getHomeCacheKey('agent'),
+    getHomeCacheKey('leader'),
+    CATEGORY_MAP_CACHE_KEY,
+    ...dynamicKeys,
+  ])));
 };
 
 export const ensureSeedTemplatesForMissingGroups = async (sections = {}, seedOptions = {}) => {
@@ -1868,16 +2017,22 @@ export const loadMenuSection = async (sectionId, title, fallbacks = {}, options 
   const selectedCategoryId = cleanText(options.categoryId);
   const selectedSubcategoryId = cleanText(options.subcategoryId);
   const selectedTitle = options.serviceSubcategoryName || options.serviceCategoryName || title;
-  const taxonomy = await extractCategoryMaps().catch(() => categoryMapCache);
-  const selectedSubcategoryIds = selectedSubcategoryId
-    ? getDescendantSubcategoryIds(selectedSubcategoryId, taxonomy)
+  const taxonomy = await extractCategoryMaps({ forceFresh: !!options.forceFreshTaxonomy }).catch(() => categoryMapCache);
+  const selectedRootSubcategoryIds = selectedCategoryId && !selectedSubcategoryId
+    ? getCategorySubcategoryIds(selectedCategoryId, taxonomy, { rootsOnly: true })
     : [];
+  const selectedSubcategoryIds = selectedSubcategoryId
+    ? getOrderedDescendantSubcategoryIds(selectedSubcategoryId, taxonomy)
+    : selectedRootSubcategoryIds.length
+      ? selectedRootSubcategoryIds.flatMap((id) => getOrderedDescendantSubcategoryIds(id, taxonomy))
+      : [];
 
   if (selectedCategoryId || selectedSubcategoryId) {
     const directData = await loadMaterialsForTaxonomy({
       categoryId: selectedCategoryId,
       subcategoryId: selectedSubcategoryId,
       subcategoryIds: selectedSubcategoryIds,
+      querySubcategoryIds: selectedSubcategoryId ? selectedSubcategoryIds : selectedRootSubcategoryIds,
       title: selectedTitle,
       role,
       user: options.user || {},

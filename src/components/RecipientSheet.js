@@ -5,7 +5,6 @@ import {
   Image,
   Modal,
   NativeModules,
-  PanResponder,
   Pressable,
   ScrollView,
   Share,
@@ -15,14 +14,16 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../context/AuthContext';
 import DownloadActionSheet from './DownloadActionSheet';
 import ProfileFooterPreview from './ProfileFooterPreview';
 import FastImage from './FastImage';
 import { getAdvisorDisplayName, pickFirst } from '../services/appData';
-import { prepareTemplateShareUrl, shareFileToWhatsApp } from '../services/downloads';
+import { prepareTemplateShareUrl, shareFileToSocialApp } from '../services/downloads';
 import { Colors } from '../theme/colors';
 import { getDownloadSourceUrl, getTemplateSettings } from '../utils/material';
 
@@ -99,10 +100,13 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
   const [actionVisible, setActionVisible] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [preparedAction, setPreparedAction] = useState(null);
+  const [shareChoicesVisible, setShareChoicesVisible] = useState(false);
+  const [logoDragging, setLogoDragging] = useState(false);
   const [previewLayout, setPreviewLayout] = useState({ width: 0, height: 0 });
   const [logoPosition, setLogoPosition] = useState({ x: 0.06, y: 0.06 });
   const logoPositionRef = useRef(logoPosition);
   const dragStartRef = useRef(logoPosition);
+  const isLogoDraggingRef = useRef(false);
 
   const templateSettings = getTemplateSettings(item || {});
   const advisorName = getAdvisorDisplayName(user);
@@ -197,25 +201,41 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
     setLogoPosition(nextPosition);
   };
 
-  const logoPanResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, gestureState) =>
-        Math.abs(gestureState.dx) > 2 || Math.abs(gestureState.dy) > 2,
-      onPanResponderGrant: () => {
-        dragStartRef.current = logoPositionRef.current;
-      },
-      onPanResponderMove: (_, gestureState) => {
-        if (!previewLayout.width || !previewLayout.height) return;
-        const maxX = Math.max(1, previewLayout.width - LOGO_OVERLAY_SIZE);
-        const maxY = Math.max(1, previewLayout.height - LOGO_OVERLAY_SIZE);
-        updateLogoPosition({
-          x: clamp(dragStartRef.current.x + gestureState.dx / maxX),
-          y: clamp(dragStartRef.current.y + gestureState.dy / maxY),
-        });
-      },
-    }),
-  ).current;
+  const beginLogoDrag = () => {
+    if (isLogoDraggingRef.current) return;
+    isLogoDraggingRef.current = true;
+    setLogoDragging(true);
+    dragStartRef.current = logoPositionRef.current;
+  };
+
+  const endLogoDrag = () => {
+    if (!isLogoDraggingRef.current) return;
+    isLogoDraggingRef.current = false;
+    setLogoDragging(false);
+  };
+
+  const handleLogoGesture = (event) => {
+    const { translationX = 0, translationY = 0 } = event.nativeEvent || {};
+    if (!previewLayout.width || !previewLayout.height) return;
+    beginLogoDrag();
+    const maxX = Math.max(1, previewLayout.width - LOGO_OVERLAY_SIZE);
+    const maxY = Math.max(1, previewLayout.height - LOGO_OVERLAY_SIZE);
+    updateLogoPosition({
+      x: clamp(dragStartRef.current.x + translationX / maxX),
+      y: clamp(dragStartRef.current.y + translationY / maxY),
+    });
+  };
+
+  const handleLogoGestureState = (event) => {
+    const { state } = event.nativeEvent || {};
+    if (state === State.BEGAN || state === State.ACTIVE) {
+      beginLogoDrag();
+      return;
+    }
+    if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
+      endLogoDrag();
+    }
+  };
 
   useEffect(() => {
     if (visible) {
@@ -244,6 +264,9 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
     setActionVisible(false);
     setActionLoading(false);
     setPreparedAction(null);
+    setShareChoicesVisible(false);
+    setLogoDragging(false);
+    isLogoDraggingRef.current = false;
   };
 
   const handleClose = () => {
@@ -321,16 +344,12 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
     try {
       setActionLoading(true);
       const result = await prepareShare(watermarkType);
-      const url = result.url;
-      if (PolicyBhandarClipboard?.copyText) {
-        await PolicyBhandarClipboard.copyText(url);
-        Alert.alert('Copied', 'Generated link copied to clipboard.');
-      } else {
-        await Share.share({
-          message: `${item?.title || 'POLICYBHANDAR template'}\n${url}`,
-          url,
-        });
-      }
+      setPreparedAction({
+        type: 'link',
+        title: item?.title || 'POLICYBHANDAR template',
+        result: { ...result, item },
+      });
+      setActionVisible(false);
     } catch (error) {
       Alert.alert('Copy failed', error?.message || 'Unable to copy this link.');
     } finally {
@@ -357,7 +376,62 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
 
   const closePreparedPreview = () => {
     if (actionLoading || downloading) return;
+    setShareChoicesVisible(false);
     setPreparedAction(null);
+  };
+
+  const getPreparedUrl = () => (
+    preparedAction?.result?.url ||
+    preparedAction?.result?.contentUri ||
+    preparedAction?.result?.fileUri ||
+    preparedAction?.result?.uri ||
+    ''
+  );
+
+  const copyPreparedLink = async () => {
+    const url = getPreparedUrl();
+    if (!url) {
+      Alert.alert('Copy failed', 'Generated link is not available.');
+      return;
+    }
+    try {
+      setActionLoading(true);
+      if (PolicyBhandarClipboard?.copyText) {
+        await PolicyBhandarClipboard.copyText(url);
+      } else {
+        await Share.share({
+          message: `${preparedAction?.title || 'POLICYBHANDAR template'}\n${url}`,
+          url,
+        });
+      }
+      Alert.alert('Copied', 'Generated link copied to clipboard.');
+    } catch (error) {
+      Alert.alert('Copy failed', error?.message || 'Unable to copy this link.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const openShareChoices = () => {
+    if (!preparedAction?.result) return;
+    setShareChoicesVisible(true);
+  };
+
+  const sharePreparedToApp = async (targetApp) => {
+    if (!preparedAction?.result) return;
+    try {
+      setActionLoading(true);
+      await shareFileToSocialApp(
+        preparedAction.result,
+        preparedAction.title || 'POLICYBHANDAR template',
+        targetApp,
+      );
+      setShareChoicesVisible(false);
+    } catch (error) {
+      Alert.alert('Share failed', error?.message || 'Unable to share this template.');
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   const confirmPreparedAction = async () => {
@@ -365,10 +439,10 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
     try {
       setActionLoading(true);
       if (preparedAction.type === 'whatsapp') {
-        await shareFileToWhatsApp(
+        await shareFileToSocialApp(
           preparedAction.result,
           preparedAction.title,
-          true,
+          'whatsapp',
         );
         reset();
         onClose();
@@ -394,7 +468,7 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
     }
   };
 
-  const preparedPreviewUrl = preparedAction?.result?.url || preparedAction?.result?.contentUri || preparedAction?.result?.uri || '';
+  const preparedPreviewUrl = getPreparedUrl();
 
   return (
     <Modal
@@ -411,6 +485,7 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
           <View style={styles.handle} />
           <ScrollView
             keyboardShouldPersistTaps="handled"
+            scrollEnabled={!logoDragging}
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.sheetContent}
           >
@@ -451,25 +526,34 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
                   </View>
                 )}
                 {yourLogo ? (
-                  <View
-                    style={[
-                      styles.logoOverlay,
-                      {
-                        left: logoPosition.x * Math.max(1, previewLayout.width - LOGO_OVERLAY_SIZE),
-                        top: logoPosition.y * Math.max(1, previewLayout.height - LOGO_OVERLAY_SIZE),
-                      },
-                    ]}
-                    {...logoPanResponder.panHandlers}
+                  <PanGestureHandler
+                    minDist={1}
+                    onGestureEvent={handleLogoGesture}
+                    onHandlerStateChange={handleLogoGestureState}
+                    shouldCancelWhenOutside={false}
                   >
-                    {logoUrl ? (
-                      <FastImage source={logoDisplaySource} style={styles.logoOverlayImage} resizeMode="contain" />
-                    ) : (
-                      <Image source={APP_LOGO} style={styles.logoOverlayImage} resizeMode="contain" />
-                    )}
-                    <View style={styles.logoDragHint}>
-                      <MaterialIcons name="open-with" size={12} color="#fff" />
+                    <View
+                      collapsable={false}
+                      style={[
+                        styles.logoOverlayTouchArea,
+                        {
+                          left: logoPosition.x * Math.max(1, previewLayout.width - LOGO_OVERLAY_SIZE),
+                          top: logoPosition.y * Math.max(1, previewLayout.height - LOGO_OVERLAY_SIZE),
+                        },
+                      ]}
+                    >
+                      <View style={[styles.logoOverlay, logoDragging && styles.logoOverlayDragging]}>
+                        {logoUrl ? (
+                          <FastImage source={logoDisplaySource} style={styles.logoOverlayImage} resizeMode="contain" />
+                        ) : (
+                          <Image source={APP_LOGO} style={styles.logoOverlayImage} resizeMode="contain" />
+                        )}
+                        <View style={styles.logoDragHint}>
+                          <MaterialIcons name="open-with" size={12} color="#fff" />
+                        </View>
+                      </View>
                     </View>
-                  </View>
+                  </PanGestureHandler>
                 ) : null}
               </View>
               {waterMark ? (
@@ -671,7 +755,11 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
               <View style={styles.generatedHeader}>
                 <View style={styles.generatedTitleWrap}>
                   <Text style={styles.generatedTitle}>
-                    {preparedAction?.type === 'whatsapp' ? 'WhatsApp Preview' : 'DigiCard Preview'}
+                    {preparedAction?.type === 'whatsapp'
+                      ? 'WhatsApp Preview'
+                      : preparedAction?.type === 'link'
+                        ? 'Copy Link Preview'
+                        : 'DigiCard Preview'}
                   </Text>
                   <Text style={styles.generatedSubtitle} numberOfLines={1}>
                     {preparedAction?.title || 'POLICYBHANDAR template'}
@@ -707,26 +795,130 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
                 >
                   <Text style={styles.generatedSecondaryText}>Back</Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.generatedPrimary, actionLoading && styles.downloadBtnDisabled]}
-                  onPress={confirmPreparedAction}
-                  disabled={actionLoading}
-                  activeOpacity={0.85}
-                >
-                  {actionLoading ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <MaterialIcons
-                      name={preparedAction?.type === 'whatsapp' ? 'share' : 'file-download'}
-                      size={19}
-                      color="#fff"
-                    />
-                  )}
-                  <Text style={styles.generatedPrimaryText}>
-                    {preparedAction?.type === 'whatsapp' ? 'Share' : 'Download'}
+                {preparedAction?.type === 'link' ? (
+                  <TouchableOpacity
+                    style={[styles.generatedPrimary, actionLoading && styles.downloadBtnDisabled]}
+                    onPress={copyPreparedLink}
+                    disabled={actionLoading}
+                    activeOpacity={0.85}
+                  >
+                    {actionLoading ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <MaterialIcons name="content-copy" size={18} color="#fff" />
+                    )}
+                    <Text style={styles.generatedPrimaryText}>Copy Link</Text>
+                  </TouchableOpacity>
+                ) : null}
+                {preparedAction?.type !== 'whatsapp' ? (
+                  <TouchableOpacity
+                    style={[styles.generatedShare, actionLoading && styles.downloadBtnDisabled]}
+                    onPress={openShareChoices}
+                    disabled={actionLoading}
+                    activeOpacity={0.85}
+                  >
+                    <MaterialIcons name="share" size={18} color={Colors.primary} />
+                    <Text style={styles.generatedShareText}>Share</Text>
+                  </TouchableOpacity>
+                ) : null}
+                {preparedAction?.type !== 'link' ? (
+                  <TouchableOpacity
+                    style={[styles.generatedPrimary, actionLoading && styles.downloadBtnDisabled]}
+                    onPress={confirmPreparedAction}
+                    disabled={actionLoading}
+                    activeOpacity={0.85}
+                  >
+                    {actionLoading ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <MaterialIcons
+                        name={preparedAction?.type === 'whatsapp' ? 'share' : 'file-download'}
+                        size={19}
+                        color="#fff"
+                      />
+                    )}
+                    <Text style={styles.generatedPrimaryText}>
+                      {preparedAction?.type === 'whatsapp' ? 'Share' : 'Download'}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={shareChoicesVisible}
+          transparent
+          animationType="fade"
+          statusBarTranslucent
+          onRequestClose={() => setShareChoicesVisible(false)}
+        >
+          <View style={styles.shareModalWrap}>
+            <Pressable
+              style={styles.generatedBackdrop}
+              onPress={actionLoading ? undefined : () => setShareChoicesVisible(false)}
+            />
+            <View style={styles.shareCard}>
+              <View style={styles.generatedHeader}>
+                <View style={styles.generatedTitleWrap}>
+                  <Text style={styles.generatedTitle}>Share template</Text>
+                  <Text style={styles.generatedSubtitle} numberOfLines={1}>
+                    {preparedAction?.title || 'POLICYBHANDAR template'}
                   </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.generatedClose}
+                  onPress={() => setShareChoicesVisible(false)}
+                  disabled={actionLoading}
+                  activeOpacity={0.82}
+                >
+                  <MaterialIcons name="close" size={21} color={Colors.textGray} />
                 </TouchableOpacity>
               </View>
+
+              <View style={styles.socialRow}>
+                <TouchableOpacity
+                  style={styles.socialBtn}
+                  onPress={() => sharePreparedToApp('whatsapp')}
+                  disabled={actionLoading}
+                  activeOpacity={0.84}
+                >
+                  <View style={[styles.socialIcon, styles.whatsappIcon]}>
+                    <Ionicons name="logo-whatsapp" size={24} color="#fff" />
+                  </View>
+                  <Text style={styles.socialText}>WhatsApp</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.socialBtn}
+                  onPress={() => sharePreparedToApp('facebook')}
+                  disabled={actionLoading}
+                  activeOpacity={0.84}
+                >
+                  <View style={[styles.socialIcon, styles.facebookIcon]}>
+                    <Ionicons name="logo-facebook" size={24} color="#fff" />
+                  </View>
+                  <Text style={styles.socialText}>Facebook</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.socialBtn}
+                  onPress={() => sharePreparedToApp('instagram')}
+                  disabled={actionLoading}
+                  activeOpacity={0.84}
+                >
+                  <View style={[styles.socialIcon, styles.instagramIcon]}>
+                    <Ionicons name="logo-instagram" size={24} color="#fff" />
+                  </View>
+                  <Text style={styles.socialText}>Instagram</Text>
+                </TouchableOpacity>
+              </View>
+
+              {actionLoading ? (
+                <View style={styles.shareLoading}>
+                  <ActivityIndicator color={Colors.primary} />
+                  <Text style={styles.shareLoadingText}>Preparing share...</Text>
+                </View>
+              ) : null}
             </View>
           </View>
         </Modal>
@@ -831,6 +1023,14 @@ const styles = StyleSheet.create({
     height: '100%',
     width: '100%',
   },
+  logoOverlayTouchArea: {
+    height: LOGO_OVERLAY_SIZE + 28,
+    padding: 14,
+    position: 'absolute',
+    transform: [{ translateX: -14 }, { translateY: -14 }],
+    width: LOGO_OVERLAY_SIZE + 28,
+    zIndex: 8,
+  },
   logoOverlay: {
     alignItems: 'center',
     backgroundColor: 'rgba(255,255,255,0.92)',
@@ -842,8 +1042,13 @@ const styles = StyleSheet.create({
     height: LOGO_OVERLAY_SIZE,
     justifyContent: 'center',
     padding: 5,
-    position: 'absolute',
+    position: 'relative',
     width: LOGO_OVERLAY_SIZE,
+  },
+  logoOverlayDragging: {
+    borderStyle: 'solid',
+    elevation: 9,
+    transform: [{ scale: 1.04 }],
   },
   logoOverlayImage: {
     height: '100%',
@@ -927,7 +1132,7 @@ const styles = StyleSheet.create({
   },
   generatedActions: {
     flexDirection: 'row',
-    gap: 10,
+    gap: 8,
     marginTop: 14,
   },
   generatedSecondary: {
@@ -944,6 +1149,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
+  generatedShare: {
+    alignItems: 'center',
+    borderColor: '#F1D0CB',
+    borderRadius: 12,
+    borderWidth: 1,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 6,
+    justifyContent: 'center',
+    minHeight: 48,
+  },
+  generatedShareText: {
+    color: Colors.primary,
+    fontSize: 13,
+    fontWeight: '900',
+  },
   generatedPrimary: {
     alignItems: 'center',
     backgroundColor: Colors.primary,
@@ -956,8 +1177,69 @@ const styles = StyleSheet.create({
   },
   generatedPrimaryText: {
     color: Colors.white,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '900',
+  },
+  shareModalWrap: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  shareCard: {
+    backgroundColor: Colors.white,
+    borderRadius: 18,
+    elevation: 24,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.24,
+    shadowRadius: 20,
+    width: '100%',
+  },
+  socialRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 8,
+  },
+  socialBtn: {
+    alignItems: 'center',
+    borderColor: Colors.border,
+    borderRadius: 14,
+    borderWidth: 1,
+    flex: 1,
+    minHeight: 96,
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  socialIcon: {
+    alignItems: 'center',
+    borderRadius: 22,
+    height: 44,
+    justifyContent: 'center',
+    marginBottom: 8,
+    width: 44,
+  },
+  whatsappIcon: { backgroundColor: '#25D366' },
+  facebookIcon: { backgroundColor: '#1877F2' },
+  instagramIcon: { backgroundColor: '#D62976' },
+  socialText: {
+    color: Colors.textDark,
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  shareLoading: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
+    marginTop: 14,
+  },
+  shareLoadingText: {
+    color: Colors.textGray,
+    fontSize: 12,
+    fontWeight: '700',
   },
   previewEmpty: {
     alignItems: 'center',

@@ -1,7 +1,7 @@
 export const BASE_URL = 'https://api2.primeimpact.in';
 
 let currentToken = null;
-const PUBLIC_GET_CACHE_TTL_MS = 45 * 1000;
+const PUBLIC_GET_CACHE_TTL_MS = 2 * 60 * 1000;
 const publicGetCache = new Map();
 const publicGetInflight = new Map();
 
@@ -121,6 +121,7 @@ const isMissingEndpointError = (error) => {
   const message = String(
     error?.data?.error ||
     error?.data?.message ||
+    (typeof error?.data === 'string' ? error.data : '') ||
     error?.message ||
     ''
   ).toLowerCase();
@@ -609,8 +610,54 @@ export const changePassword = async (data) => {
 export const getMaterialCategories = (options = {}) =>
   apiRequest('/api/materials/categories', options);
 
-export const getMaterialSubcategories = (categoryId, options = {}) =>
-  apiRequest(`/api/materials/categories/${categoryId}/subcategories`, options);
+const unwrapApiList = (payload) => {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.data?.items)) return payload.data.items;
+  if (Array.isArray(payload?.data?.subcategories)) return payload.data.subcategories;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.subcategories)) return payload.subcategories;
+  return [];
+};
+
+const readApiId = (value) => {
+  if (!value) return '';
+  if (typeof value === 'object') return String(value._id || value.id || value.value || '');
+  return String(value);
+};
+
+const withFilteredListPayload = (payload, list) => {
+  if (Array.isArray(payload?.data)) return { ...payload, data: list };
+  if (Array.isArray(payload?.data?.items)) return { ...payload, data: { ...payload.data, items: list } };
+  if (Array.isArray(payload?.data?.subcategories)) return { ...payload, data: { ...payload.data, subcategories: list } };
+  if (Array.isArray(payload?.items)) return { ...payload, items: list };
+  if (Array.isArray(payload?.subcategories)) return { ...payload, subcategories: list };
+  return { ...(payload || {}), data: list };
+};
+
+export const getMaterialSubcategories = async (categoryId, options = {}) => {
+  try {
+    return await apiRequest(`/api/materials/categories/${categoryId}/subcategories`, options);
+  } catch (error) {
+    if (!isMissingEndpointError(error)) throw error;
+  }
+
+  const response = await apiRequest('/api/materials/subcategories', {
+    ...options,
+    params: {
+      ...(options.params || {}),
+      categoryId,
+    },
+  });
+  const selectedCategoryId = String(categoryId || '');
+  const list = unwrapApiList(response.data).filter((item) =>
+    readApiId(item?.categoryId || item?.category) === selectedCategoryId
+  );
+  return {
+    ...response,
+    data: withFilteredListPayload(response.data, list),
+  };
+};
 
 export const getAllMaterialSubcategories = (options = {}) =>
   apiRequest('/api/materials/subcategories', options);

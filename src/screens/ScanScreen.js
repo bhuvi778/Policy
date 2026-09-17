@@ -17,10 +17,10 @@ import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityI
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
 const { PolicyBhandarVisitingCardScanner } = NativeModules;
-const CARD_FRAME_WIDTH = width * 0.84;
-const CARD_FRAME_HEIGHT = CARD_FRAME_WIDTH * 0.58;
+const CARD_FRAME_WIDTH = Math.min(width * 0.9, 420);
+const CARD_FRAME_HEIGHT = Math.min(CARD_FRAME_WIDTH * 0.62, height * 0.34);
 const CARD_FRAME_RATIO = CARD_FRAME_WIDTH / CARD_FRAME_HEIGHT;
 
 let Camera = null;
@@ -49,8 +49,20 @@ const makePhotoUri = (photo = {}) => {
 const getCapturedPhotoPath = (photo = {}) => String(photo?.path || '').replace(/^file:\/\//, '');
 
 const extractPhoneFromText = (text = '') => {
-  const matches = String(text || '').match(/(?:\+?91[-\s]?)?[6-9][0-9][\s-]?[0-9]{3}[\s-]?[0-9]{5}|[6-9][0-9]{9}/g) || [];
-  return matches.map((item) => item.replace(/\D/g, '').slice(-10)).find((item) => item.length === 10) || '';
+  const normalized = String(text || '')
+    .replace(/[‐-‒–—−]/g, '-')
+    .replace(/[\u00A0]/g, ' ');
+  const numberSafe = normalized.replace(/[Oo]/g, '0').replace(/[Il|]/g, '1').replace(/[Ss]/g, '5');
+  const candidates = numberSafe.match(/(?:\(?\+?\s*91\)?[\s-]*)?(?:0[\s-]*)?(?:[6-9][\s-]*)?(?:\d[\s-]*){9,11}/g) || [];
+  const cleaned = candidates
+    .map((item) => item.replace(/\D/g, ''))
+    .map((digits) => {
+      if (digits.length === 12 && digits.startsWith('91')) return digits.slice(2);
+      if (digits.length === 11 && digits.startsWith('0')) return digits.slice(1);
+      return digits.slice(-10);
+    })
+    .filter((digits) => digits.length === 10);
+  return cleaned.find((digits) => /^[6-9]/.test(digits)) || cleaned[0] || '';
 };
 
 const extractNameFromText = (text = '') => {
@@ -58,7 +70,7 @@ const extractNameFromText = (text = '') => {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  const badWords = /(phone|mobile|email|www|http|\.com|@|regards|consultant|advisor|agent|manager|director|pvt|ltd|company|insurance|policy|address)/i;
+  const badWords = /(phone|mobile|email|www|http|\.com|@|regards|consultant|advisor|agent|manager|director|pvt|ltd|company|insurance|policy|bhandar|address|office|branch|gst|cin)/i;
   const candidates = lines.filter((line) => (
     line.length >= 3 &&
     line.length <= 42 &&
@@ -71,10 +83,13 @@ const extractNameFromText = (text = '') => {
 const buildCapturedClient = (photo = null, processed = null) => {
   const ocrText = processed?.text || '';
   const image = processed?.uri || makePhotoUri(photo);
+  const parsedPhone = processed?.mobile || extractPhoneFromText(ocrText);
+  const parsedName = processed?.name || extractNameFromText(ocrText);
   return {
     id: String(Date.now()),
-    name: extractNameFromText(ocrText),
-    mobile: extractPhoneFromText(ocrText),
+    name: parsedName,
+    mobile: parsedPhone,
+    phones: processed?.phones || (parsedPhone ? [parsedPhone] : []),
     email: String(ocrText).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || '',
     company: '',
     designation: '',
@@ -102,35 +117,44 @@ const Header = ({ insets, onBack, torch, onTorch }) => (
   </View>
 );
 
-const CaptureOverlay = ({ insets, loading, onCapture }) => (
-  <View style={styles.overlay} pointerEvents="box-none">
-    <View style={styles.centerLayer} pointerEvents="none">
-      <View style={styles.cardFrame}>
+const CaptureOverlay = ({ insets, loading, onCapture }) => {
+  const bottomInset = insets?.bottom || 0;
+  const controlsHeight = 176 + bottomInset;
+  const controlsTop = Math.max(0, height - controlsHeight);
+  const preferredFrameTop = Math.max((height - CARD_FRAME_HEIGHT) / 2, (insets?.top || 0) + 104);
+  const frameTop = Math.max(
+    (insets?.top || 0) + 96,
+    Math.min(preferredFrameTop, controlsTop - CARD_FRAME_HEIGHT - 28),
+  );
+
+  return (
+    <View style={[styles.overlay, { height, width }]} pointerEvents="box-none">
+      <View style={[styles.cardFrame, { top: frameTop }]} pointerEvents="none">
         <View style={[styles.corner, styles.cTL]} />
         <View style={[styles.corner, styles.cTR]} />
         <View style={[styles.corner, styles.cBL]} />
         <View style={[styles.corner, styles.cBR]} />
         <MaterialCommunityIcons name="card-account-details-outline" size={46} color="rgba(255,255,255,0.22)" />
       </View>
-    </View>
-    <View style={[styles.bottomControls, { paddingBottom: (insets?.bottom || 0) + 22 }]}>
+      <View style={[styles.bottomControls, { minHeight: controlsHeight, paddingBottom: bottomInset + 18, top: controlsTop }]}>
       <Text style={styles.hint}>Place the visiting card inside the frame</Text>
-      <TouchableOpacity
-        style={[styles.captureBtn, loading && styles.captureBtnDisabled]}
-        onPress={onCapture}
-        activeOpacity={0.84}
-        disabled={loading}
-      >
-        {loading ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <MaterialCommunityIcons name="camera" size={32} color="#fff" />
-        )}
-      </TouchableOpacity>
-      <Text style={styles.subHint}>Capture will open Data Entry for saving contact details.</Text>
+      <Text style={styles.subHint}>Capture will open your phone Contacts screen with detected details.</Text>
+        <TouchableOpacity
+          style={[styles.captureBtn, loading && styles.captureBtnDisabled]}
+          onPress={onCapture}
+          activeOpacity={0.84}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <MaterialCommunityIcons name="camera" size={32} color="#fff" />
+          )}
+        </TouchableOpacity>
+      </View>
     </View>
-  </View>
-);
+  );
+};
 
 const CameraCardCapture = ({ navigation, insets }) => {
   const { hasPermission, requestPermission } = useCameraPermission();
@@ -140,12 +164,25 @@ const CameraCardCapture = ({ navigation, insets }) => {
   const [active, setActive] = useState(true);
   const [capturing, setCapturing] = useState(false);
 
-  const openDataEntry = useCallback((client) => {
-    navigation.navigate('DataEntry', {
-      prefillClient: client,
-      source: 'card_capture',
-    });
-  }, [navigation]);
+  const openPhoneContactEditor = useCallback(async (client) => {
+    if (!PolicyBhandarVisitingCardScanner?.openContactEditor) {
+      Alert.alert('Unavailable', 'Phone contact editor is not available in this build.');
+      return;
+    }
+    if (!client?.mobile) {
+      Alert.alert('Phone number not found', 'Mobile number detect nahi hua. Card ko center frame me rakhein, glare kam karein, aur phone number wali side clear rakhein.');
+      return;
+    }
+    const phonePayload = Array.isArray(client?.phones) && client.phones.length
+      ? client.phones.join('\n')
+      : client.mobile;
+
+    await PolicyBhandarVisitingCardScanner.openContactEditor(
+      client.name || 'Scanned Contact',
+      phonePayload,
+      client.cardImage || client.image || '',
+    );
+  }, []);
 
   const handleCapture = useCallback(async () => {
     if (capturing) return;
@@ -158,13 +195,13 @@ const CameraCardCapture = ({ navigation, insets }) => {
       const processed = path && PolicyBhandarVisitingCardScanner?.processCardImage
         ? await PolicyBhandarVisitingCardScanner.processCardImage(path, CARD_FRAME_RATIO)
         : null;
-      openDataEntry(buildCapturedClient(photo, processed));
+      await openPhoneContactEditor(buildCapturedClient(photo, processed));
     } catch (error) {
       Alert.alert('Capture failed', error?.message || 'Unable to capture visiting card. Please try again.');
     } finally {
       setCapturing(false);
     }
-  }, [capturing, openDataEntry, torch]);
+  }, [capturing, openPhoneContactEditor, torch]);
 
   useEffect(() => {
     if (!hasPermission) requestPermission();
@@ -227,15 +264,12 @@ const FallbackView = ({ navigation, insets }) => (
     <CaptureOverlay
       insets={insets}
       loading={false}
-      onCapture={() => navigation.navigate('DataEntry', {
-        prefillClient: buildCapturedClient(null),
-        source: 'card_capture',
-      })}
+      onCapture={() => Alert.alert('Camera unavailable', 'Camera capture is not active in this build.')}
     />
     <View style={styles.fallbackCenter}>
       <MaterialCommunityIcons name="card-account-details-outline" size={66} color="rgba(255,255,255,0.3)" />
       <Text style={styles.permTitle}>Card Capture</Text>
-      <Text style={styles.permSub}>Camera module is not active in this build. You can still open Data Entry manually.</Text>
+      <Text style={styles.permSub}>Camera module is not active in this build. Please install the latest APK with camera support.</Text>
     </View>
     <Header insets={insets} onBack={() => navigation.goBack()} />
   </>
@@ -288,28 +322,27 @@ const styles = StyleSheet.create({
   headerTitle: { color: '#fff', flex: 1, fontSize: 17, fontWeight: '700', marginLeft: 8 },
   overlay: {
     ...StyleSheet.absoluteFillObject,
-  },
-  centerLayer: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingBottom: 96,
+    zIndex: 2,
   },
   cardFrame: {
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.08)',
+    backgroundColor: 'rgba(0,0,0,0.12)',
+    borderColor: 'rgba(255,255,255,0.18)',
+    borderRadius: 18,
+    borderWidth: 1,
     height: CARD_FRAME_HEIGHT,
     justifyContent: 'center',
+    left: (width - CARD_FRAME_WIDTH) / 2,
+    position: 'absolute',
     width: CARD_FRAME_WIDTH,
   },
   bottomControls: {
     alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.42)',
-    bottom: 0,
     gap: 12,
     left: 0,
     paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingTop: 14,
     position: 'absolute',
     right: 0,
   },

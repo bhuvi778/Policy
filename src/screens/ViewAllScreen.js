@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Dimensions,
   FlatList,
+  Platform,
   ScrollView as RNScrollView,
   StatusBar,
   StyleSheet,
@@ -169,7 +170,6 @@ const ViewAllScreen = ({ route, navigation }) => {
   const [searchText, setSearchText] = useState('');
   const [sheetVisible, setSheetVisible] = useState(false);
   const [selectedItem, setSelectedItem] = useState(null);
-  const [categoryStripActive, setCategoryStripActive] = useState(false);
   const categoryListRef = useRef(null);
   const categoryOffsetRef = useRef(0);
   const mediaMode = isMediaCollection(pageTitle, []);
@@ -242,14 +242,14 @@ const ViewAllScreen = ({ route, navigation }) => {
     return baseFilteredData.filter((item) => getCategoryMeta(item, pageTitle, { groupByRoot: groupCategoriesByRoot }).id === activeCategory);
   }, [activeCategory, baseFilteredData, groupCategoriesByRoot, pageTitle]);
 
-  const handleCardPress = (item) => {
+  const handleCardPress = useCallback((item) => {
     if (isMediaItem(item, pageTitle) || isDocumentItem(item, pageTitle)) {
       navigation.navigate('MediaViewer', { item, title: pageTitle });
       return;
     }
     setSelectedItem(item);
     setSheetVisible(true);
-  };
+  }, [navigation, pageTitle]);
 
   const handleTemplateDownload = async (details) => {
     try {
@@ -261,7 +261,7 @@ const ViewAllScreen = ({ route, navigation }) => {
     }
   };
 
-  const renderCard = ({ item }) => (
+  const renderCard = useCallback(({ item }) => (
     <TouchableOpacity
       style={styles.card}
       activeOpacity={0.82}
@@ -288,7 +288,7 @@ const ViewAllScreen = ({ route, navigation }) => {
         </TouchableOpacity>
       </View>
     </TouchableOpacity>
-  );
+  ), [handleCardPress, pageTitle]);
 
   const renderCategoryTile = ({ item: option }) => {
     const active = activeCategory === option.id;
@@ -407,11 +407,6 @@ const ViewAllScreen = ({ route, navigation }) => {
                 categoryOffsetRef.current = event.nativeEvent.contentOffset.x;
               }}
               scrollEventThrottle={16}
-              onTouchStart={() => setCategoryStripActive(true)}
-              onTouchEnd={() => setCategoryStripActive(false)}
-              onTouchCancel={() => setCategoryStripActive(false)}
-              onScrollEndDrag={() => setCategoryStripActive(false)}
-              onMomentumScrollEnd={() => setCategoryStripActive(false)}
             >
               {categoryOptions.map((option) => (
                 <View key={String(option.id)}>
@@ -436,12 +431,12 @@ const ViewAllScreen = ({ route, navigation }) => {
         numColumns={2}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
-        scrollEnabled={!categoryStripActive}
         columnWrapperStyle={styles.row}
-        removeClippedSubviews={false}
-        maxToRenderPerBatch={6}
+        removeClippedSubviews={Platform.OS === 'android'}
+        maxToRenderPerBatch={4}
         initialNumToRender={6}
-        windowSize={7}
+        updateCellsBatchingPeriod={40}
+        windowSize={5}
         ListEmptyComponent={(
           <View style={styles.emptyWrap}>
             <Text style={styles.emptyText}>No content found for selected filters.</Text>
