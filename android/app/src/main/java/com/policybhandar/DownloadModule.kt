@@ -418,7 +418,7 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
     if (!file.exists()) throw IOException("Shared file does not exist.")
     return FileProvider.getUriForFile(
       reactContext,
-      "${reactContext.packageName}.fileprovider",
+      "${reactContext.packageName}.downloads.fileprovider",
       file
     )
   }
