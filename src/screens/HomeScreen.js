@@ -16,19 +16,25 @@ import {
   loadAnyCachedHomeContent,
   loadCachedScopedHomeContent,
   loadHomeContent,
+  invalidateHomeContentCache,
   getUserProfileRole,
   normalizeProfileRole,
   primeCategoryMapFromServiceTree,
 } from '../services/contentMapper';
 import { useAuth } from '../context/AuthContext';
 import { BRAND, getSubscriptionInfo, loadDynamicNotifications } from '../services/appData';
-import { fetchMaterialServiceTree, getDefaultMaterialServiceTree, loadCachedMaterialServiceTree } from '../services/materialServiceTree';
+import {
+  fetchMaterialServiceTree,
+  getDefaultMaterialServiceTree,
+  loadCachedMaterialServiceTree,
+} from '../services/materialServiceTree';
 import { getMaterialSubcategories } from '../services/api';
 import { getMediaUrl, isImageUrl, isVideoUrl } from '../utils/material';
 const EMPTY_SECTIONS = createEmptySectionState();
 const HOME_BANNER_LIMIT = 5;
 const HOME_ROW_PREVIEW_LIMIT = 8;
-const HOME_BANNER_GROUP_DISPLAY_LIMIT = 80;
+const HOME_INITIAL_BANNER_GROUP_LIMIT = 8;
+const HOME_BANNER_GROUP_DISPLAY_LIMIT = 18;
 const LAST_HOME_SCOPE_KEY = '@policybhandar_last_home_scope_v1';
 
 const sectionsHaveContent = (sectionState = {}) =>
@@ -267,6 +273,7 @@ const HomeScreen = ({ navigation }) => {
   const [error, setError] = useState('');
   const [notificationCount, setNotificationCount] = useState(0);
   const [hasContentLoaded, setHasContentLoaded] = useState(false);
+  const [visibleGroupLimit, setVisibleGroupLimit] = useState(HOME_INITIAL_BANNER_GROUP_LIMIT);
   const scopedSectionsCache = useRef(new Map());
   const prefetchedScopeKeys = useRef(new Set());
   const prefetchedImageUrls = useRef(new Set());
@@ -282,19 +289,22 @@ const HomeScreen = ({ navigation }) => {
     const isScopedHome = !!(homeScope?.categoryId || homeScope?.subcategoryId);
     const isRoleOnlyScope = !!homeScope && !isScopedHome;
     const shouldFetchAll = false;
-    const preferCacheFirst = silent || isScopedHome || isRoleOnlyScope;
+    const preferCacheFirst = !showAlert && (silent || isScopedHome);
     const requestId = ++contentRequestRef.current;
     if (!silent) setLoading(true);
     if (!silent) setError('');
     try {
       const content = await loadHomeContent({}, {
         includeFallbacks: false,
-        includeTaxonomy: !silent || isScopedHome,
+        includeTaxonomy: true,
+        forceFreshTaxonomy: showAlert,
         fetchAll: shouldFetchAll,
-        useCached: true,
+        useCached: !showAlert,
         preferCacheFirst,
-        scopedLimit: 180,
-        scopedMaxPages: isScopedHome ? 4 : 2,
+        scopedLimit: 160,
+        scopedMaxPages: isScopedHome ? 3 : 2,
+        maxDirectQueries: isScopedHome ? 18 : undefined,
+        forceFreshMaterials: showAlert,
         user: authUser,
         profileRole: effectiveHomeRole,
         categoryId: homeScope?.categoryId || '',
@@ -320,10 +330,13 @@ const HomeScreen = ({ navigation }) => {
         loadHomeContent({}, {
           includeFallbacks: false,
           includeTaxonomy: true,
+          forceFreshTaxonomy: false,
           fetchAll: false,
           useCached: false,
-          scopedLimit: 180,
-          scopedMaxPages: isScopedHome ? 4 : 2,
+          scopedLimit: 160,
+          scopedMaxPages: isScopedHome ? 3 : 2,
+          maxDirectQueries: isScopedHome ? 18 : undefined,
+          forceFreshMaterials: false,
           user: authUser,
           profileRole: effectiveHomeRole,
           categoryId: homeScope?.categoryId || '',
@@ -342,9 +355,11 @@ const HomeScreen = ({ navigation }) => {
       } else if (silent && !isScopedHome) {
         loadHomeContent({}, {
           includeFallbacks: false,
-          includeTaxonomy: isScopedHome,
+          includeTaxonomy: true,
+          forceFreshTaxonomy: false,
           fetchAll: false,
           useCached: false,
+          forceFreshMaterials: false,
           user: authUser,
           profileRole: effectiveHomeRole,
           categoryId: homeScope?.categoryId || '',
@@ -452,61 +467,51 @@ const HomeScreen = ({ navigation }) => {
       }));
     };
 
-    loadCachedMaterialServiceTree({ allowStale: true })
-      .then((cached) => {
-        if (!active || !cached.length) return;
-        showedAny = true;
-        setServiceTree(cached);
-        rememberExpandedGroups(cached);
-      })
-      .catch(() => {});
-
-    fallbackTimer = setTimeout(() => {
-      if (!active || showedAny) return;
-      const fallbackGroups = getDefaultMaterialServiceTree();
-      if (!fallbackGroups.length) return;
+    const showGroups = (groups = []) => {
+      if (!active || !groups.length) return;
       showedAny = true;
-      setServiceTree(fallbackGroups);
-      rememberExpandedGroups(fallbackGroups);
-    }, 1200);
+      const visibleGroups = groups.map((group) => ({ ...group, loading: false }));
+      setServiceTree((current) => {
+        const nextHasTree = visibleGroups.some((group) => Array.isArray(group.tree) && group.tree.length);
+        const currentHasTree = current.some((group) => Array.isArray(group.tree) && group.tree.length);
+        return !nextHasTree && currentHasTree ? current : visibleGroups;
+      });
+      primeCategoryMapFromServiceTree(visibleGroups);
+      rememberExpandedGroups(visibleGroups);
+    };
+
+    const defaultGroups = getDefaultMaterialServiceTree();
+    showGroups(defaultGroups);
+    loadCachedMaterialServiceTree({ allowStale: true }).then(showGroups).catch(() => {});
+    fallbackTimer = setTimeout(() => {
+      if (!showedAny) showGroups(defaultGroups);
+    }, 700);
 
     lastServiceRefreshRef.current = Date.now();
     fetchMaterialServiceTree({
       timeout: 9000,
-      forceRefresh: true,
+      forceRefresh: false,
       onPartial: (groups) => {
-        if (!active || !groups.length) return;
-        showedAny = true;
-        setServiceTree((current) => {
-          const nextHasTree = groups.some((group) => Array.isArray(group.tree) && group.tree.length);
-          const currentHasTree = current.some((group) => Array.isArray(group.tree) && group.tree.length);
-          return !nextHasTree && currentHasTree ? current : groups;
-        });
-        primeCategoryMapFromServiceTree(groups);
-        rememberExpandedGroups(groups);
+        showGroups(groups);
       },
     })
       .then((groups) => {
         if (!active) return;
-        showedAny = groups.length > 0;
-        const finalGroups = groups.map((group) => ({ ...group, loading: false }));
-        setServiceTree(finalGroups);
-        primeCategoryMapFromServiceTree(finalGroups);
-        rememberExpandedGroups(finalGroups);
+        if (groups.length) showGroups(groups);
         setServicesLoaded(true);
       })
       .catch((err) => {
         if (active) {
-          if (!showedAny) {
-            const fallbackGroups = getDefaultMaterialServiceTree();
-            setServiceTree(fallbackGroups);
-            rememberExpandedGroups(fallbackGroups);
-          }
-          setServicesError('');
+          setServiceTree((current) => {
+            if (current.length) return current.map((group) => ({ ...group, loading: false }));
+            return defaultGroups;
+          });
+          setServicesError(err?.message || 'Unable to load backend services right now.');
           setServicesLoaded(true);
         }
       })
       .finally(() => {
+        if (fallbackTimer) clearTimeout(fallbackTimer);
         if (active) setServicesLoading(false);
       });
 
@@ -519,7 +524,7 @@ const HomeScreen = ({ navigation }) => {
   useEffect(() => {
     if (!subscription.active || !scopePickerOpen || servicesLoading) return undefined;
     const now = Date.now();
-    if (now - lastServiceRefreshRef.current < 30000) return undefined;
+    if (now - lastServiceRefreshRef.current < 120000) return undefined;
 
     let active = true;
     lastServiceRefreshRef.current = now;
@@ -541,7 +546,7 @@ const HomeScreen = ({ navigation }) => {
 
     fetchMaterialServiceTree({
       timeout: 9000,
-      forceRefresh: true,
+      forceRefresh: false,
       onPartial: (groups) => {
         if (!active || !groups.length) return;
         setServiceTree(groups);
@@ -659,6 +664,14 @@ const HomeScreen = ({ navigation }) => {
 
   const hasAnyContent = sectionsHaveContent(sections);
   useEffect(() => {
+    setVisibleGroupLimit(HOME_INITIAL_BANNER_GROUP_LIMIT);
+    const task = InteractionManager.runAfterInteractions(() => {
+      setVisibleGroupLimit(HOME_BANNER_GROUP_DISPLAY_LIMIT);
+    });
+    return () => task?.cancel?.();
+  }, [homeScope?.categoryId, homeScope?.subcategoryId, effectiveHomeRole]);
+
+  useEffect(() => {
     if (!hasAnyContent) return;
     const task = InteractionManager.runAfterInteractions(() => {
       const imageUrls = Object.values(sections || {})
@@ -668,7 +681,7 @@ const HomeScreen = ({ navigation }) => {
         .filter(Boolean);
       Array.from(new Set(imageUrls))
         .filter((url) => !prefetchedImageUrls.current.has(url))
-        .slice(0, 18)
+        .slice(0, 10)
         .forEach((url) => {
           prefetchedImageUrls.current.add(url);
           Image.prefetch(url).catch(() => {});
@@ -683,6 +696,10 @@ const HomeScreen = ({ navigation }) => {
   const groupedItems = useMemo(
     () => uniqueItems((sections.bannerGroups || []).flatMap((group) => Array.isArray(group?.data) ? group.data : [])),
     [sections.bannerGroups],
+  );
+  const visibleBannerGroups = useMemo(
+    () => (sections.bannerGroups || []).slice(0, visibleGroupLimit),
+    [sections.bannerGroups, visibleGroupLimit],
   );
   const contentTypeTiles = useMemo(() => {
     const allTextItems = uniqueItems([
@@ -1005,7 +1022,20 @@ const HomeScreen = ({ navigation }) => {
       <Header
         onMenuPress={() => setDrawerOpen(true)}
         onSearchPress={() => navigation.navigate('Search')}
-        onRefreshPress={() => loadContent({ showAlert: true, silent: false })}
+        onRefreshPress={async () => {
+          await invalidateHomeContentCache().catch(() => {});
+          await fetchMaterialServiceTree({
+            timeout: 9000,
+            forceRefresh: true,
+            onPartial: (groups) => {
+              if (!groups?.length) return;
+              setServiceTree(groups);
+              primeCategoryMapFromServiceTree(groups);
+            },
+          }).catch(() => {});
+          setServicesLoaded(false);
+          loadContent({ showAlert: true, silent: false });
+        }}
         onNotificationPress={() => navigation.navigate('Notifications')}
         notificationCount={notificationCount}
       />
@@ -1057,7 +1087,7 @@ const HomeScreen = ({ navigation }) => {
               onPress={(tile) => handleContentTypePress(tile, contentTypeTiles)}
             />
 
-            {(sections.bannerGroups || []).slice(0, HOME_BANNER_GROUP_DISPLAY_LIMIT).map((group, index) => {
+            {visibleBannerGroups.map((group, index) => {
               if (!group?.data?.length && !scopedHomeActive) return null;
               const groupTitle = group.title || group.bannerGroupTitle || homeScope?.label || `Templates ${index + 1}`;
               const previewData = Array.isArray(group.previewData) && group.previewData.length
@@ -1257,7 +1287,7 @@ const HomeScreen = ({ navigation }) => {
                   <ActivityIndicator color={Colors.primary} />
                   <Text style={styles.scopeLoadingText}>Loading backend services...</Text>
                 </View>
-              ) : servicesError ? (
+              ) : servicesError && !serviceTree.length ? (
                 <View style={styles.scopeEmpty}>
                   <Text style={styles.scopeEmptyText}>{servicesError}</Text>
                 </View>

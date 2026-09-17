@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Dimensions,
-  FlatList, Animated, StatusBar, PermissionsAndroid, Alert,
+  FlatList, Animated, StatusBar, PermissionsAndroid,
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { Colors } from '../theme/colors';
@@ -57,13 +57,6 @@ const PERMISSION_SCREENS = [
     desc: 'Storage permissions is necessary to run this app to store data like your profile data and downloaded content by you.',
     icon: 'folder',
     permission: PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
-  },
-  {
-    id: 'contacts',
-    title: 'Contact Permission:',
-    desc: 'Please Grant Permission to save POLICYBHANDAR Number in your Mobile if Not Exist, This will Help both of us for smooth communication.',
-    icon: 'contacts',
-    permission: PermissionsAndroid.PERMISSIONS.READ_CONTACTS,
   },
 ];
 

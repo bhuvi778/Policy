@@ -46,6 +46,17 @@ const Storage = {
       try { await _AsyncStorage.multiRemove(keys); return; } catch (_) {}
     }
   },
+
+  async getAllKeys() {
+    const memKeys = Array.from(_mem.keys());
+    if (_nativeOk) {
+      try {
+        const nativeKeys = await _AsyncStorage.getAllKeys();
+        return Array.from(new Set([...memKeys, ...(nativeKeys || [])]));
+      } catch (_) {}
+    }
+    return memKeys;
+  },
 };
 
 export default Storage;

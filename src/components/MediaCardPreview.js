@@ -42,10 +42,18 @@ const MediaCardPreview = React.memo(({ item = {}, sectionTitle = '', imageStyle,
 
   if (shouldShowVideoPlaceholder) {
     return (
-      <View style={[styles.placeholder, styles.videoPlaceholder, placeholderStyle]}>
-        <MaterialIcons name="play-circle-outline" size={44} color="#FFFFFF" />
-        <Text style={[subtitleStyle, styles.videoLabel]} numberOfLines={3}>{item.title || 'Video'}</Text>
-      </View>
+      <>
+        <View style={[styles.placeholder, styles.videoPlaceholder, imageStyle, placeholderStyle]}>
+          <MaterialIcons name="play-circle-outline" size={34} color="#FFFFFF" />
+          <Text style={[styles.videoLabel, subtitleStyle]} numberOfLines={2}>
+            {item.title || 'Video'}
+          </Text>
+        </View>
+        <View style={[styles.typeBadge, { backgroundColor: kindMeta.color }]}>
+          <MaterialIcons name={kindMeta.icon} size={12} color="#fff" />
+          <Text style={styles.typeBadgeText}>{kindMeta.label}</Text>
+        </View>
+      </>
     );
   }
 

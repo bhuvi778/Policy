@@ -10,9 +10,7 @@ import { Colors } from '../theme/colors';
 import { pickFirst, saveClient } from '../services/appData';
 
 const cleanPhone = (value = '') => String(value || '').replace(/\D/g, '').slice(-10);
-
 const getPrefillClient = (params = {}) => params.prefillClient || params.client || null;
-
 const DataEntryScreen = ({ route, navigation }) => {
   const insets = useSafeAreaInsets();
   const initialPrefill = getPrefillClient(route?.params);
@@ -56,6 +54,8 @@ const DataEntryScreen = ({ route, navigation }) => {
     memberType,
     policyNo: policyNo.trim(),
     company: company.trim(),
+    image: cardImage,
+    cardImage,
     plan: plan.trim(),
     premium: premium.trim(),
     dueDate: dueDate.trim(),
