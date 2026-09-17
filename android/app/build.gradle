@@ -109,7 +109,7 @@ android {
     }
     externalNativeBuild {
         cmake {
-            buildStagingDirectory "C:/b"
+            buildStagingDirectory "C:/c39"
         }
     }
     signingConfigs {
