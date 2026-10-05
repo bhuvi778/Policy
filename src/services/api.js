@@ -549,6 +549,9 @@ export const completeProfile = (data) =>
 
 export const getProfile = (options = {}) => apiRequest('/api/auth/me', options);
 
+export const deleteAccount = () =>
+  apiRequest('/api/auth/delete-account', { method: 'DELETE' });
+
 export const updateProfile = async (data = {}) => {
   const imageFile = getProfileImageFile(data);
   const textPayload = withoutProfileImageFields(data);

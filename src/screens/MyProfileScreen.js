@@ -17,7 +17,8 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
-import { changePassword, updateProfile } from '../services/api';
+import { changePassword, deleteAccount, updateProfile } from '../services/api';
+import { SHOW_PLAN_ENTRY_POINTS } from '../utils/platform';
 import {
   BRAND,
   getAdvisorDisplayName,
@@ -252,21 +253,28 @@ const MyProfileScreen = ({ navigation }) => {
     if (deleteRequestLoading) return;
     Alert.alert(
       'Delete My Account',
-      'This will send an account deletion request to admin. Your data and profile will be deleted within 24 hours after approval.',
+      'This will permanently delete your account and profile. This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Send Request',
+          text: 'Delete',
           style: 'destructive',
-          onPress: () => {
+          onPress: async () => {
             setDeleteRequestLoading(true);
-            setTimeout(() => {
+            try {
+              await deleteAccount();
+            } catch (error) {
               setDeleteRequestLoading(false);
-              Alert.alert(
-                'Request Sent',
-                'Your data and profile deletion request has been sent. Your data will be deleted within 24 hours.',
-              );
-            }, 250);
+              Alert.alert('Delete failed', error?.message || 'Unable to delete your account. Please try again.');
+              return;
+            }
+            await logout();
+            setDeleteRequestLoading(false);
+            navigation.reset({
+              index: 0,
+              routes: [{ name: 'Login' }],
+            });
+            Alert.alert('Account deleted', 'Your account and profile have been permanently deleted.');
           },
         },
       ],
@@ -491,9 +499,11 @@ const MyProfileScreen = ({ navigation }) => {
           {!subscription.active ? (
             <Text style={styles.membershipNote}>No active subscription is linked to this account yet.</Text>
           ) : null}
-          <TouchableOpacity style={styles.renewBtn} onPress={() => navigation.navigate('Subscription')}>
-            <Text style={styles.renewText}>{subscription.active ? 'Manage Plan' : 'Choose Plan'}</Text>
-          </TouchableOpacity>
+          {SHOW_PLAN_ENTRY_POINTS ? (
+            <TouchableOpacity style={styles.renewBtn} onPress={() => navigation.navigate('Subscription')}>
+              <Text style={styles.renewText}>{subscription.active ? 'Manage Plan' : 'Choose Plan'}</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         <TouchableOpacity

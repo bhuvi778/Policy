@@ -17,6 +17,7 @@ import { Colors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
 import { getSubscriptionInfo } from '../services/appData';
 import { getPlans, getTrainingCategories, getTrainings } from '../services/api';
+import { SHOW_PLAN_ENTRY_POINTS } from '../utils/platform';
 
 const unwrapList = (payload) => {
   if (Array.isArray(payload)) return payload;
@@ -206,7 +207,7 @@ const TrainingScreen = ({ navigation }) => {
               {locked ? 'Locked by current plan' : `${categoryTrainings.length || 0} video${categoryTrainings.length === 1 ? '' : 's'}`}
             </Text>
           </View>
-          {locked ? (
+          {locked && SHOW_PLAN_ENTRY_POINTS ? (
             <TouchableOpacity
               style={[styles.actionBtn, styles.actionBtnLocked]}
               onPress={() => navigation.navigate('Subscription')}

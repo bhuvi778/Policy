@@ -37,6 +37,8 @@
 	<false/>
 	<key>NSCameraUsageDescription</key>
 	<string>PolicyBhandar uses the camera to scan visiting cards and documents.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>PolicyBhandar saves the posters, images and videos you download or share to your Photos.</string>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
