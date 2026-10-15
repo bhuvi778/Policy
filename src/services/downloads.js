@@ -1,5 +1,6 @@
-import { Linking, NativeModules, Platform, Share } from 'react-native';
+import { Linking, NativeModules, Platform, Share, PermissionsAndroid } from 'react-native';
 import { BASE_URL, downloadMaterial, getDirectDownload, getDownloadJob } from './api';
+import { getAppOverlayLogoUrl } from '../utils/templateBranding';
 import {
   getDownloadFilename,
   getDownloadSourceUrl,
@@ -9,6 +10,8 @@ import {
   isVideoUrl,
 } from '../utils/material';
 import { assertCanDownload, recordDownload } from './downloadQuota';
+import { getBrandImageUrl, getProfileImageUrl, normalizeProfileAsset } from '../utils/profileAssets';
+import { getAdvisorDisplayName } from '../utils/profileIdentity';
 
 const { PolicyBhandarDownloader } = NativeModules;
 
@@ -135,19 +138,13 @@ const withLogoAliases = (logoUrl = '') => ({
   logoImageUrl: logoUrl,
   brandLogo: logoUrl,
   brandLogoUrl: logoUrl,
-  profileImage: logoUrl,
-  profileImageUrl: logoUrl,
-  profilePhoto: logoUrl,
-  profilePhotoUrl: logoUrl,
-  profilePicture: logoUrl,
-  profilePictureUrl: logoUrl,
-  profilePic: logoUrl,
-  avatar: logoUrl,
-  avatarUrl: logoUrl,
-  photo: logoUrl,
-  photoUrl: logoUrl,
-  image: logoUrl,
-  imageUrl: logoUrl,
+
+});
+
+const withProfileAliases = (uri = '') => ({
+  profileImage: uri, profileImageUrl: uri, profilePhoto: uri, profilePhotoUrl: uri,
+  profilePicture: uri, profilePictureUrl: uri, profilePic: uri, avatar: uri, avatarUrl: uri,
+  photo: uri, photoUrl: uri, image: uri, imageUrl: uri,
 });
 
 const buildQrImageUrl = (value = '') => {
@@ -175,16 +172,7 @@ const getUserDetails = (details = {}) => {
   );
 
   return {
-    advisorName: pickFirstText(
-      details.advisorName,
-      user.name,
-      user.fullName,
-      user.full_name,
-      user.advisorName,
-      profile.name,
-      profile.fullName,
-      'Insurance Advisor',
-    ),
+    advisorName: getAdvisorDisplayName({ name: details.advisorName }, user),
     advisorDesignation: pickFirstText(
       details.advisorDesignation,
       user.designation,
@@ -205,6 +193,7 @@ const getUserDetails = (details = {}) => {
       user.email,
       profile.email,
     ),
+    profileImageUrl: normalizeProfileAsset(details.profileImageUrl || getProfileImageUrl(user)),
     logoUrl: pickFirstUrl(
       details.logoUrl,
       details.profileLogo,
@@ -228,6 +217,7 @@ const getUserDetails = (details = {}) => {
       details.photoUrl,
       details.image,
       details.imageUrl,
+      getBrandImageUrl(user),
       user.logoUrl,
       user.logo,
       user.companyLogo,
@@ -404,6 +394,7 @@ const toBackendPayload = (details = {}, item = {}) => {
     advisorMobile: userDetails.advisorMobile,
     advisorEmail: userDetails.advisorEmail,
     ...withLogoAliases(outgoingLogoUrl),
+    ...withProfileAliases(includeLogo ? (userDetails.profileImageUrl || outgoingLogoUrl) : ''),
     qrCodeUrl: includeQrCode ? userDetails.qrCodeUrl : '',
     qrData: userDetails.qrData,
     templateSettings: getTemplateSettings(item),
@@ -432,6 +423,8 @@ const pollDownloadJobUrl = async (jobId, attempts = 6) => {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, attempt < 2 ? 800 : 1600));
     const job = await getDownloadJob(jobId);
+    const state = String(unwrap(job.data)?.status || '').toLowerCase();
+    if (['failed', 'error', 'cancelled'].includes(state)) throw new Error('Media rendering failed. Please try again.');
     const url = normalizeDownloadUrl(extractUrl(job.data));
     if (url) return url;
   }
@@ -480,6 +473,7 @@ const toDirectDownloadParams = (sourceUrl, materialId, payload) => ({
   advisorMobile: payload.advisorMobile,
   advisorEmail: payload.advisorEmail,
   ...withLogoAliases(payload.logoUrl),
+  ...withProfileAliases(payload.profileImageUrl),
   qrCodeUrl: payload.qrCodeUrl,
   qrData: payload.qrData,
 });
@@ -543,6 +537,10 @@ const getMediaWatermarkDetails = (user = {}, options = {}) => {
     includeSocialCaption: true,
     showSocialCaption: true,
     yourLogo: hasLogo,
+    includeLogoOverlay: hasLogo && !!userDetails.profileImageUrl && userDetails.logoUrl !== userDetails.profileImageUrl,
+    logoOverlayUrl: userDetails.logoUrl,
+    logoOverlayX: 0.94,
+    logoOverlayY: 0.04,
     includeLogo: hasLogo,
     showLogo: hasLogo,
     qrCode: hasQr,
@@ -553,6 +551,7 @@ const getMediaWatermarkDetails = (user = {}, options = {}) => {
     advisorMobile: userDetails.advisorMobile,
     advisorEmail: userDetails.advisorEmail,
     ...withLogoAliases(userDetails.logoUrl),
+    ...withProfileAliases(userDetails.profileImageUrl || userDetails.logoUrl),
     qrCodeUrl: userDetails.qrCodeUrl,
     generatedDate: formatDownloadDate(),
   };
@@ -596,7 +595,9 @@ const getLocalComposerOptions = (details = {}, item = {}) => {
     advisorMobile: payload.advisorMobile,
     advisorEmail: payload.advisorEmail,
     ...withLogoAliases(payload.logoUrl),
+    ...withProfileAliases(payload.profileImageUrl),
     qrCodeUrl: payload.qrCodeUrl,
+    qrData: payload.qrData,
   };
 };
 
@@ -610,105 +611,55 @@ const hasLocalCustomizations = (options = {}) =>
     options.includeQrCode
   );
 
-export const downloadTemplateToDevice = async (item, details = {}) => {
+const preparedFiles = new Map();
+const PREPARED_TTL = 10 * 60 * 1000;
+
+const preparePersonalizedFile = async (item, details, { remote = false, preferMediaUrl = false } = {}) => {
   const quotaUser = details.user || {};
   await assertCanDownload(quotaUser);
+  const sourceUrl = normalizeDownloadUrl((preferMediaUrl ? getMediaUrl(item) : '') || getDownloadSourceUrl(item) || getMediaUrl(item) || extractUrl(item));
+  if (!sourceUrl) throw new Error('The media file is not available. Please refresh and try again.');
+  const customization = getLocalComposerOptions(details, item);
+  const video = isVideoUrl(sourceUrl) || /reel|video|story/i.test(String(item?.type || item?.raw?.type || ''));
+  const nativeMethod = video ? PolicyBhandarDownloader?.prepareCustomizedVideo : PolicyBhandarDownloader?.prepareCustomizedImage;
+  const composeOnDevice = !remote && Platform.OS === 'android' && !!nativeMethod;
+  // Android uses the same branded footer across delivery modes. QR/asset/text changes still rerender.
+  const renderKey = composeOnDevice ? { ...customization, watermarkType: undefined } : customization;
+  const key = JSON.stringify([sourceUrl, renderKey, remote]);
+  const cached = preparedFiles.get(key);
+  if (cached && Date.now() - cached.createdAt < PREPARED_TTL) return { ...await cached.promise, user: quotaUser };
 
-  const sourceAssetUrl = normalizeDownloadUrl(getDownloadSourceUrl(item) || extractUrl(item));
-  const localOptions = getLocalComposerOptions(details, item);
-  const canApplyLocalComposer =
-    Platform.OS === 'android' &&
-    !!sourceAssetUrl &&
-    !isVideoUrl(sourceAssetUrl) &&
-    hasLocalCustomizations(localOptions);
-
-  let result;
-
-  if (canApplyLocalComposer && PolicyBhandarDownloader?.downloadCustomizedImage) {
-    result = await PolicyBhandarDownloader.downloadCustomizedImage(
-      sourceAssetUrl,
-      getWatermarkedFilename(item, sourceAssetUrl),
-      localOptions,
-    );
-    await recordDownload(quotaUser);
-    return result;
-  }
-
-  if (canApplyLocalComposer && PolicyBhandarDownloader?.downloadImageWithWatermark) {
-    result = await PolicyBhandarDownloader.downloadImageWithWatermark(
-      sourceAssetUrl,
-      getWatermarkedFilename(item, sourceAssetUrl),
-      getWatermarkText(details) || localOptions.recipientName || localOptions.advisorName,
-      localOptions,
-    );
-    await recordDownload(quotaUser);
-    return result;
-  }
-
-  const renderedUrl = await resolveBackendDownloadUrl(item, details);
-  const sourceUrl = normalizeDownloadUrl(
-    renderedUrl || sourceAssetUrl,
-  );
-
-  if (!sourceUrl) {
-    throw new Error('Download URL is not available for this template.');
-  }
-
-  const filename = getDownloadFilename(item, sourceUrl);
-  const mimeType = sourceUrl.toLowerCase().includes('.mp4') ? 'video/mp4' : 'image/*';
-
-  if (Platform.OS === 'android' && PolicyBhandarDownloader?.download) {
-    result = await PolicyBhandarDownloader.download(sourceUrl, filename, mimeType);
-    await recordDownload(quotaUser);
-    return result;
-  }
-
-  await Linking.openURL(sourceUrl);
-  result = { filename, url: sourceUrl };
-  await recordDownload(quotaUser);
-  return result;
+  const promise = (async () => {
+    const privateProfileAsset = [customization.logoUrl, customization.profileImageUrl].some((uri) => /^(file:|content:|data:|policybhandar:)/i.test(uri || ''));
+    const privateOverlay = /^(file:|content:|data:|policybhandar:)/i.test(customization.logoOverlayUrl || '') && customization.logoOverlayUrl !== getAppOverlayLogoUrl(true);
+    if (remote && (privateProfileAsset || privateOverlay)) {
+      throw new Error('Please save your profile photo/logo online before creating a public link. You can still download and share the personalized file.');
+    }
+    const filename = video ? getDownloadFilename(item, sourceUrl).replace(/\.[a-z0-9]+$/i, '.mp4') : getWatermarkedFilename(item, sourceUrl);
+    if (composeOnDevice) {
+      const result = await nativeMethod(sourceUrl, filename, customization);
+      const fileUrl = result?.fileUri || result?.contentUri || result?.uri;
+      if (!fileUrl || !result.customized) throw new Error('Personalized media could not be prepared. Please try again.');
+      return { ...result, url: fileUrl, filename: result.filename || filename, mimeType: result.mimeType || (video ? 'video/mp4' : 'image/jpeg'), user: quotaUser };
+    }
+    const renderedUrl = await resolveBackendDownloadUrl(item, details, { preferMediaUrl, pollAttempts: video ? 18 : 6 });
+    if (!renderedUrl || (hasLocalCustomizations(customization) && isSameDownloadAsset(renderedUrl, sourceUrl))) {
+      throw new Error('Personalized media is unavailable right now. Please retry; your original unbranded file has not been downloaded.');
+    }
+    const resolvedName = getDownloadFilename(item, renderedUrl);
+    return { url: renderedUrl, filename: resolvedName, mimeType: getMimeType(resolvedName || renderedUrl), user: quotaUser };
+  })();
+  preparedFiles.set(key, { createdAt: Date.now(), promise });
+  while (preparedFiles.size > 12) preparedFiles.delete(preparedFiles.keys().next().value);
+  try { return await promise; }
+  catch (error) { preparedFiles.delete(key); throw error; }
 };
 
-export const prepareTemplateShareUrl = async (item, details = {}) => {
-  const quotaUser = details.user || {};
-  await assertCanDownload(quotaUser);
+export const prepareTemplateShareUrl = (item, details = {}, options = {}) => preparePersonalizedFile(item, details, options);
 
-  const sourceAssetUrl = normalizeDownloadUrl(getDownloadSourceUrl(item) || extractUrl(item));
-  const localOptions = getLocalComposerOptions(details, item);
-  const canApplyLocalComposer =
-    Platform.OS === 'android' &&
-    !!sourceAssetUrl &&
-    !isVideoUrl(sourceAssetUrl) &&
-    hasLocalCustomizations(localOptions);
-
-  if (canApplyLocalComposer && PolicyBhandarDownloader?.downloadCustomizedImage) {
-    const result = await PolicyBhandarDownloader.downloadCustomizedImage(
-      sourceAssetUrl,
-      getWatermarkedFilename(item, sourceAssetUrl),
-      localOptions,
-    );
-    await recordDownload(quotaUser);
-    return {
-      url: result?.contentUri || result?.fileUri || result?.uri || result?.url || sourceAssetUrl,
-      filename: result?.filename || getWatermarkedFilename(item, sourceAssetUrl),
-      mimeType: 'image/png',
-      savedToDevice: true,
-    };
-  }
-
-  const renderedUrl = await resolveBackendDownloadUrl(item, details);
-  const sourceUrl = normalizeDownloadUrl(renderedUrl || sourceAssetUrl);
-
-  if (!sourceUrl) {
-    throw new Error('Share URL is not available for this template.');
-  }
-
-  const filename = getDownloadFilename(item, sourceUrl);
-  return {
-    url: sourceUrl,
-    filename,
-    mimeType: getMimeType(filename || sourceUrl),
-  };
+export const downloadTemplateToDevice = async (item, details = {}) => {
+  const prepared = await prepareTemplateShareUrl(item, details);
+  return downloadPreparedFileToDevice(prepared, item, details.user || {});
 };
 
 const getMimeType = (url = '') => {
@@ -739,7 +690,10 @@ export const shareFileToWhatsApp = async (file = {}, message = '', whatsappOnly 
   const mimeType = file.mimeType || getMimeType(filename || url);
 
   if (Platform.OS === 'android' && PolicyBhandarDownloader?.shareFile) {
-    return PolicyBhandarDownloader.shareFile(url, filename, mimeType, message, whatsappOnly);
+    if (file.user) await assertCanDownload(file.user);
+    const result = await PolicyBhandarDownloader.shareFile(url, filename, mimeType, message, whatsappOnly);
+    if (file.user) await recordDownload(file.user);
+    return result;
   }
 
   return Share.share({
@@ -759,7 +713,10 @@ export const shareFileToSocialApp = async (file = {}, message = '', targetApp = 
   const target = String(targetApp || '').toLowerCase();
 
   if (Platform.OS === 'android' && PolicyBhandarDownloader?.shareFileToApp) {
-    return PolicyBhandarDownloader.shareFileToApp(url, filename, mimeType, message, target);
+    if (file.user) await assertCanDownload(file.user);
+    const result = await PolicyBhandarDownloader.shareFileToApp(url, filename, mimeType, message, target);
+    if (file.user) await recordDownload(file.user);
+    return result;
   }
 
   if (target === 'whatsapp') {
@@ -771,6 +728,10 @@ export const shareFileToSocialApp = async (file = {}, message = '', targetApp = 
 
 export const downloadPreparedFileToDevice = async (file = {}, item = {}, user = {}) => {
   await assertCanDownload(user);
+  if (Platform.OS === 'android' && Number(Platform.Version) < 29) {
+    const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE);
+    if (granted !== PermissionsAndroid.RESULTS.GRANTED) throw new Error('Storage permission is required to save this file to Downloads.');
+  }
 
   const url = normalizeDownloadUrl(file.url || file.contentUri || file.fileUri || file.uri || '');
   if (!url) {
@@ -793,65 +754,11 @@ export const downloadPreparedFileToDevice = async (file = {}, item = {}, user = 
   return result;
 };
 
+export const prepareMediaShareUrl = (item, user = {}, options = {}) => preparePersonalizedFile(
+  item, getMediaWatermarkDetails(user, options), { ...options, preferMediaUrl: true },
+);
+
 export const downloadMediaToDevice = async (item, user = {}, options = {}) => {
-  await assertCanDownload(user);
-
-  const materialId = getMaterialId(item);
-  const rawSourceUrl = normalizeDownloadUrl(
-    getMediaUrl(item) ||
-      getDownloadSourceUrl(item) ||
-      extractUrl(item),
-  );
-  const renderedUrl = await resolveBackendDownloadUrl(
-    item,
-    getMediaWatermarkDetails(user, options),
-    { preferMediaUrl: true, pollAttempts: 18 },
-  );
-  const sourceUrl = normalizeDownloadUrl(renderedUrl || rawSourceUrl);
-
-  if (!sourceUrl) {
-    throw new Error('Download URL is not available for this media.');
-  }
-
-  const filename = getDownloadFilename(item, sourceUrl);
-  const mimeType = getMimeType(filename || sourceUrl);
-  let result;
-
-  if (Platform.OS === 'android' && PolicyBhandarDownloader?.download) {
-    result = await PolicyBhandarDownloader.download(sourceUrl, filename, mimeType);
-    await recordDownload(user);
-    return result;
-  }
-
-  await Linking.openURL(sourceUrl);
-  result = { filename, url: sourceUrl };
-  await recordDownload(user);
-  return result;
-};
-
-export const prepareMediaShareUrl = async (item, user = {}, options = {}) => {
-  await assertCanDownload(user);
-
-  const rawSourceUrl = normalizeDownloadUrl(
-    getMediaUrl(item) ||
-      getDownloadSourceUrl(item) ||
-      extractUrl(item),
-  );
-  const renderedUrl = await resolveBackendDownloadUrl(
-    item,
-    getMediaWatermarkDetails(user, options),
-    { preferMediaUrl: true, pollAttempts: 18 },
-  );
-  const sourceUrl = normalizeDownloadUrl(renderedUrl || rawSourceUrl);
-
-  if (!sourceUrl) {
-    throw new Error('Share URL is not available for this media.');
-  }
-
-  const filename = getDownloadFilename(item, sourceUrl);
-  return {
-    url: sourceUrl,
-    filename,
-    mimeType: getMimeType(filename || sourceUrl),
-  };
+  const prepared = await prepareMediaShareUrl(item, user, options);
+  return downloadPreparedFileToDevice(prepared, item, user);
 };

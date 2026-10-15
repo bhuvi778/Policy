@@ -16,7 +16,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
 import { getSubscriptionInfo } from '../services/appData';
-import { getPlans, getTrainingCategories, getTrainings } from '../services/api';
+import { getPlans } from '../services/api';
+import { loadTrainingCategories, loadTrainingVideos } from '../services/trainingData';
 
 const unwrapList = (payload) => {
   if (Array.isArray(payload)) return payload;
@@ -95,6 +96,11 @@ const TrainingScreen = ({ navigation }) => {
   const [trainings, setTrainings] = useState([]);
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [plansReady, setPlansReady] = useState(false);
+  const [plansFailed, setPlansFailed] = useState(false);
+  const [refreshRevision, setRefreshRevision] = useState(0);
+  const [loadError, setLoadError] = useState('');
+  const visibleCategories = useMemo(() => mergeCategoriesWithTrainings(categories, trainings), [categories, trainings]);
 
   const allowedTrainingNames = useMemo(() => {
     const rawActivePlan = user.activePlan;
@@ -116,24 +122,26 @@ const TrainingScreen = ({ navigation }) => {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    Promise.all([
-      getTrainingCategories().then((res) => unwrapList(res.data)).catch(() => []),
-      getTrainings({ page: 1, limit: 80 }).then((res) => unwrapList(res.data)).catch(() => []),
-      getPlans().then((res) => unwrapList(res.data)).catch(() => []),
-    ])
-      .then(([nextCategories, nextTrainings, nextPlans]) => {
-        if (!active) return;
-        setCategories(mergeCategoriesWithTrainings(nextCategories, nextTrainings));
-        setTrainings(nextTrainings);
-        setPlans(nextPlans);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
+    setPlansReady(false);
+    setPlansFailed(false);
+    setLoadError('');
+    const show = (setter) => (items) => { if (active) { setter(items); if (items.length) setLoading(false); } };
+    const failed = () => { if (active) setLoadError('Training server is temporarily unavailable. Please try again.'); };
+    Promise.allSettled([
+      loadTrainingCategories({ onUpdate: show(setCategories), refresh: refreshRevision > 0 }).then(show(setCategories)).catch(failed),
+      loadTrainingVideos({ onUpdate: show(setTrainings), refresh: refreshRevision > 0 }).then(show(setTrainings)).catch(failed),
+    ]).then(() => { if (active) setLoading(false); });
+    // A slow plan lookup must not hide categories. Access remains locked until
+    // current plan metadata is received; cached public videos grant no access.
+    getPlans({ cache: false, timeout: 9000 }).then((res) => {
+      const nextPlans = unwrapList(res.data);
+      if (!nextPlans.length) throw Error('Plan access metadata is unavailable');
+      if (active) { setPlans(nextPlans); setPlansReady(true); }
+    }).catch(() => { if (active) setPlansFailed(true); failed(); });
     return () => {
       active = false;
     };
-  }, []);
+  }, [refreshRevision]);
 
   const openTrainingVideo = async (training) => {
     const url = getTrainingUrl(training);
@@ -192,7 +200,7 @@ const TrainingScreen = ({ navigation }) => {
       return categoryId === getId(item) || normalizeName(categoryName) === normalized;
     });
     const explicitlyAllowed = !allowedTrainingNames.length || allowedTrainingNames.includes(normalized);
-    const locked = !subscription.active || !explicitlyAllowed || item.isPremium === true;
+    const locked = !plansReady || !subscription.active || !explicitlyAllowed || item.isPremium === true;
 
     return (
       <View style={styles.card}>
@@ -203,7 +211,7 @@ const TrainingScreen = ({ navigation }) => {
           <View style={styles.cardCopy}>
             <Text style={styles.cardTitle}>{title}</Text>
             <Text style={styles.cardMeta}>
-              {locked ? 'Locked by current plan' : `${categoryTrainings.length || 0} video${categoryTrainings.length === 1 ? '' : 's'}`}
+              {plansFailed ? 'Access check failed. Pull down to retry.' : !plansReady ? 'Checking plan access...' : locked ? 'Locked by current plan' : `${categoryTrainings.length || 0} video${categoryTrainings.length === 1 ? '' : 's'}`}
             </Text>
           </View>
           {locked ? (
@@ -242,20 +250,22 @@ const TrainingScreen = ({ navigation }) => {
         </View>
       </View>
 
-      {loading ? (
+      {loading && !visibleCategories.length ? (
         <View style={styles.loadingWrap}>
           <ActivityIndicator color={Colors.primary} />
           <Text style={styles.loadingText}>Loading training access...</Text>
         </View>
       ) : (
         <FlatList
-          data={categories}
+          refreshing={loading && refreshRevision > 0}
+          onRefresh={() => setRefreshRevision((revision) => revision + 1)}
+          data={visibleCategories}
           keyExtractor={(item, index) => getId(item) || `${item.name || 'training'}-${index}`}
           renderItem={renderCategory}
           contentContainerStyle={styles.listContent}
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
-              <Text style={styles.emptyText}>No training content is available yet.</Text>
+              <Text style={styles.emptyText}>{loadError || 'No training content is available yet.'}</Text>
             </View>
           }
         />

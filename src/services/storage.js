@@ -19,6 +19,11 @@ try {
 const _mem = new Map();
 
 const Storage = {
+  async setItemDurable(key, value) {
+    if (!_nativeOk) throw new Error('Device storage is unavailable. Please reopen the app and try again.');
+    await _AsyncStorage.setItem(key, value);
+    _mem.set(key, value);
+  },
   async getItem(key) {
     if (_nativeOk) {
       try { return await _AsyncStorage.getItem(key); } catch (_) {}

@@ -14,7 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { PanGestureHandler, State } from 'react-native-gesture-handler';
+import { GestureHandlerRootView, PanGestureHandler, State } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -23,9 +23,11 @@ import DownloadActionSheet from './DownloadActionSheet';
 import ProfileFooterPreview from './ProfileFooterPreview';
 import FastImage from './FastImage';
 import { getAdvisorDisplayName, pickFirst } from '../services/appData';
-import { prepareTemplateShareUrl, shareFileToSocialApp } from '../services/downloads';
+import { prepareTemplateShareUrl, shareFileToSocialApp, downloadPreparedFileToDevice } from '../services/downloads';
+import { getBrandImageUrl, getProfileImageUrl, normalizeProfileAsset } from '../utils/profileAssets';
 import { Colors } from '../theme/colors';
 import { getDownloadSourceUrl, getTemplateSettings } from '../utils/material';
+import { getAppOverlayLogoUrl } from '../utils/templateBranding';
 
 const RECIPIENT_TYPES = ['Dear', 'Respected', 'Other', 'None'];
 const FONT_COLORS = ['#111111', '#C0392B', '#1A237E', '#1B5E20', '#4A148C', '#FFFFFF'];
@@ -42,7 +44,6 @@ const QR_POSITIONS = [
 
 const { PolicyBhandarClipboard } = NativeModules;
 const APP_LOGO = require('../assets/images/policybhandar_logo.png');
-const APP_LOGO_NATIVE_URL = 'policybhandar://logo';
 const LOGO_OVERLAY_SIZE = 72;
 
 const clamp = (value, minValue = 0, maxValue = 1) =>
@@ -58,7 +59,7 @@ const assetUrl = (value) => {
 const firstAssetUrl = (...values) => {
   for (const value of values) {
     const url = assetUrl(value);
-    if (url) return url;
+    if (url) return normalizeProfileAsset(url);
   }
   return '';
 };
@@ -86,7 +87,7 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
   const { user = {} } = useAuth() || {};
   const [recipientType, setRecipientType] = useState('');
   const [recipientName, setRecipientName] = useState('');
-  const [yourLogo, setYourLogo] = useState(false);
+  const [yourLogo, setYourLogo] = useState(true);
   const [waterMark, setWaterMark] = useState(true);
   const [socialCaption, setSocialCaption] = useState(true);
   const [qrCode, setQrCode] = useState(false);
@@ -102,6 +103,7 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
   const [preparedAction, setPreparedAction] = useState(null);
   const [shareChoicesVisible, setShareChoicesVisible] = useState(false);
   const [logoDragging, setLogoDragging] = useState(false);
+  const [previewAspect, setPreviewAspect] = useState(1.32);
   const [previewLayout, setPreviewLayout] = useState({ width: 0, height: 0 });
   const [logoPosition, setLogoPosition] = useState({ x: 0.06, y: 0.06 });
   const logoPositionRef = useRef(logoPosition);
@@ -113,6 +115,7 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
   const advisorDesignation = pickFirst(user.designation, user.role, 'Insurance Advisor');
   const defaultRecipientName = advisorName && advisorName !== 'Insurance Advisor' ? advisorName : '';
   const logoUrl = firstAssetUrl(
+    getBrandImageUrl(user),
     user.logoUrl,
     user.logo,
     user.companyLogo,
@@ -193,8 +196,8 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
   const qrCodeUrl = uploadedQrCodeUrl || buildQrImageUrl(qrData);
   const previewUrl = firstAssetUrl(item?.image, item?.thumbnail, item?.imageUrl, getDownloadSourceUrl(item || {}));
   const languageLabel = item?.language || item?.raw?.language || '';
-  const logoDisplaySource = logoUrl ? { uri: logoUrl } : APP_LOGO;
-  const logoDownloadUrl = logoUrl || APP_LOGO_NATIVE_URL;
+  const logoDisplaySource = APP_LOGO;
+  const logoPreviewSize = Math.max(1, Math.min(previewLayout.width, previewLayout.height) * 0.16);
 
   const updateLogoPosition = (nextPosition) => {
     logoPositionRef.current = nextPosition;
@@ -218,8 +221,8 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
     const { translationX = 0, translationY = 0 } = event.nativeEvent || {};
     if (!previewLayout.width || !previewLayout.height) return;
     beginLogoDrag();
-    const maxX = Math.max(1, previewLayout.width - LOGO_OVERLAY_SIZE);
-    const maxY = Math.max(1, previewLayout.height - LOGO_OVERLAY_SIZE);
+    const maxX = Math.max(1, previewLayout.width - logoPreviewSize);
+    const maxY = Math.max(1, previewLayout.height - logoPreviewSize);
     updateLogoPosition({
       x: clamp(dragStartRef.current.x + translationX / maxX),
       y: clamp(dragStartRef.current.y + translationY / maxY),
@@ -239,18 +242,19 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
 
   useEffect(() => {
     if (visible) {
+      setYourLogo(true);
       setRecipientName(defaultRecipientName);
       setFontColor('#111111');
       setOutputSize('backend');
       setQrPosition('right');
       updateLogoPosition({ x: 0.06, y: 0.06 });
     }
-  }, [defaultRecipientName, visible]);
+  }, [visible, item?.id, item?.title]);
 
   const reset = () => {
     setRecipientType('');
     setRecipientName(defaultRecipientName);
-    setYourLogo(false);
+    setYourLogo(true);
     setWaterMark(true);
     setSocialCaption(true);
     setQrCode(false);
@@ -275,8 +279,8 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
     onClose();
   };
 
-  const buildPayload = (watermarkType = 'digicard') => {
-    const includeLogo = waterMark && yourLogo;
+  const buildPayload = (watermarkType = 'digicard', remote = false) => {
+    const includeLogo = waterMark && !!(getProfileImageUrl(user) || logoUrl);
     const includeSocialCaption = waterMark && socialCaption;
     const forceQrFooter = watermarkType === 'whatsapp' || watermarkType === 'link';
     const includeQrCode = waterMark && (qrCode || forceQrFooter);
@@ -295,7 +299,7 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
       includeLogoOverlay: yourLogo,
       logoOverlayX: logoPosition.x,
       logoOverlayY: logoPosition.y,
-      logoOverlayUrl: yourLogo ? logoDownloadUrl : '',
+      logoOverlayUrl: yourLogo ? getAppOverlayLogoUrl(remote) : '',
       socialCaption: includeSocialCaption,
       qrCode: includeQrCode,
       fontColor,
@@ -308,7 +312,8 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
       advisorDesignation,
       advisorMobile: user.mobile || user.phone || '',
       advisorEmail: user.email || '',
-      logoUrl: includeLogo ? logoDownloadUrl : '',
+      logoUrl: includeLogo ? logoUrl : '',
+      profileImageUrl: includeLogo ? getProfileImageUrl(user) || logoUrl : '',
       qrCodeUrl: includeQrCode ? qrCodeUrl : '',
       qrData,
     };
@@ -335,15 +340,15 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
     }
   };
 
-  const prepareShare = async (watermarkType = 'link') => {
-    const result = await prepareTemplateShareUrl(item, buildPayload(watermarkType));
+  const prepareShare = async (watermarkType = 'link', remote = false) => {
+    const result = await prepareTemplateShareUrl(item, buildPayload(watermarkType, remote), { remote });
     return result;
   };
 
   const handleShareLink = async (watermarkType = 'link') => {
     try {
       setActionLoading(true);
-      const result = await prepareShare(watermarkType);
+      const result = await prepareShare(watermarkType, true);
       setPreparedAction({
         type: 'link',
         title: item?.title || 'POLICYBHANDAR template',
@@ -449,13 +454,8 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
         return;
       }
 
-      if (preparedAction.result?.savedToDevice) {
-        Alert.alert('Downloaded', `${preparedAction.result?.filename || 'Template'} saved to Downloads.`);
-      } else if (onDownload) {
-        await onDownload(preparedAction.payload);
-      } else if (onSubmit) {
-        await onSubmit(preparedAction.payload);
-      }
+      const downloaded = await downloadPreparedFileToDevice(preparedAction.result, item, user);
+      Alert.alert('Downloaded', `${downloaded?.filename || 'Template'} saved to Downloads.`);
       reset();
       onClose();
     } catch (error) {
@@ -478,7 +478,7 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
       statusBarTranslucent
       onRequestClose={handleClose}
     >
-      <View style={styles.wrapper}>
+      <GestureHandlerRootView style={styles.wrapper}>
         <Pressable style={styles.backdrop} onPress={handleClose} />
 
         <View style={[styles.sheet, { paddingBottom: insets.bottom + 16 }]}>
@@ -509,7 +509,7 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
                 </View>
               ) : null}
               <View
-                style={styles.previewMedia}
+                style={[styles.previewMedia, { aspectRatio: previewAspect }]}
                 onLayout={(event) => setPreviewLayout(event.nativeEvent.layout)}
               >
                 {previewUrl ? (
@@ -518,6 +518,10 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
                     style={styles.previewImage}
                     resizeMode="contain"
                     priority="high"
+                    onLoad={(event) => {
+                      const { width, height } = event.nativeEvent.source || {};
+                      if (width > 0 && height > 0) setPreviewAspect(width / height);
+                    }}
                   />
                 ) : (
                   <View style={styles.previewEmpty}>
@@ -525,6 +529,9 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
                     <Text style={styles.previewEmptyText}>Template preview</Text>
                   </View>
                 )}
+                {waterMark ? <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
+                  <Text style={{ color: fontColor, opacity: 0.18, fontSize: Math.max(14, previewLayout.width * 0.055), fontWeight: 'bold', transform: [{ rotate: '-25deg' }] }}>{recipientName || advisorName}</Text>
+                </View> : null}
                 {yourLogo ? (
                   <PanGestureHandler
                     minDist={1}
@@ -534,20 +541,18 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
                   >
                     <View
                       collapsable={false}
+                      accessibilityLabel="Drag Policy Bhandar app logo"
                       style={[
                         styles.logoOverlayTouchArea,
                         {
-                          left: logoPosition.x * Math.max(1, previewLayout.width - LOGO_OVERLAY_SIZE),
-                          top: logoPosition.y * Math.max(1, previewLayout.height - LOGO_OVERLAY_SIZE),
+                          width: logoPreviewSize + 28, height: logoPreviewSize + 28,
+                          left: logoPosition.x * Math.max(1, previewLayout.width - logoPreviewSize),
+                          top: logoPosition.y * Math.max(1, previewLayout.height - logoPreviewSize),
                         },
                       ]}
                     >
-                      <View style={[styles.logoOverlay, logoDragging && styles.logoOverlayDragging]}>
-                        {logoUrl ? (
-                          <FastImage source={logoDisplaySource} style={styles.logoOverlayImage} resizeMode="contain" />
-                        ) : (
-                          <Image source={APP_LOGO} style={styles.logoOverlayImage} resizeMode="contain" />
-                        )}
+                      <View style={[styles.logoOverlay, { width: logoPreviewSize, height: logoPreviewSize }, logoDragging && styles.logoOverlayDragging]}>
+                        <Image source={logoDisplaySource} style={styles.logoOverlayImage} resizeMode="contain" />
                         <View style={styles.logoDragHint}>
                           <MaterialIcons name="open-with" size={12} color="#fff" />
                         </View>
@@ -560,10 +565,10 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
                 <ProfileFooterPreview
                   user={user}
                   name={recipientName || advisorName}
-                  showLogo={yourLogo}
+                  showLogo={!!(getProfileImageUrl(user) || logoUrl)}
                   showQrCode={qrCode}
                   showSocialCaption={socialCaption}
-                  logoUrl={yourLogo ? logoUrl : ''}
+                  logoUrl={logoUrl}
                   qrCodeUrl={qrCode ? qrCodeUrl : ''}
                   fontColor={fontColor}
                   qrPosition={qrPosition}
@@ -619,8 +624,8 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
             </View>
 
             <View style={styles.optRow}>
-              <CheckOption label="Your Logo" checked={yourLogo} onToggle={() => setYourLogo(!yourLogo)} />
-              <CheckOption label="Profile Footer" checked={waterMark} onToggle={() => setWaterMark(!waterMark)} />
+              <CheckOption label="App Logo" checked={yourLogo} onToggle={() => setYourLogo(!yourLogo)} />
+              <CheckOption label="Watermark & Footer" checked={waterMark} onToggle={() => setWaterMark(!waterMark)} />
               <TouchableOpacity
                 style={styles.optItem}
                 onPress={() => setColorsOpen(!colorsOpen)}
@@ -922,7 +927,7 @@ const RecipientSheet = ({ visible, onClose, onSubmit, onDownload, item }) => {
             </View>
           </View>
         </Modal>
-      </View>
+      </GestureHandlerRootView>
     </Modal>
   );
 };

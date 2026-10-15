@@ -17,7 +17,7 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
-import { changePassword, updateProfile } from '../services/api';
+import { changePassword } from '../services/api';
 import {
   BRAND,
   getAdvisorDisplayName,
@@ -29,6 +29,8 @@ import {
   pickFirst,
 } from '../services/appData';
 import { getProfileImageUrl } from '../components/ProfileFooterPreview';
+import ProfileImageCropModal from '../components/ProfileImageCropModal';
+import { normalizeProfileFields } from '../utils/profileFields';
 
 const { PolicyBhandarProfileImagePicker } = NativeModules;
 
@@ -96,7 +98,7 @@ const EmptyAssignment = ({ label }) => (
 
 const MyProfileScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
-  const { user: authUser = {}, token, login, logout } = useAuth();
+  const { user: authUser = {}, logout, saveProfileChanges, refreshProfile } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [name, setName] = useState('');
   const [designation, setDesignation] = useState('');
@@ -115,9 +117,13 @@ const MyProfileScreen = ({ navigation }) => {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [profileImage, setProfileImage] = useState(null);
+  const [cropImage, setCropImage] = useState(null);
+  const [imageLoading, setImageLoading] = useState(false);
   const [settings, setSettings] = useState({ brandName: BRAND.name, supportEmail: BRAND.email });
   const [clientStats, setClientStats] = useState({ clients: 0, policies: 0 });
   const logoutTimerRef = useRef(null);
+  const profileSaveRef = useRef(false);
+  const [syncLoading, setSyncLoading] = useState(false);
 
   const displayName = getAdvisorDisplayName(authUser).toUpperCase();
   const designationText = pickFirst(authUser.designation, authUser.role, 'Insurance Advisor');
@@ -128,25 +134,28 @@ const MyProfileScreen = ({ navigation }) => {
   const rep = getAssignedRep(authUser);
 
   useEffect(() => {
+    if (isEditing) return;
+    const fields = normalizeProfileFields(authUser);
     setName(authUser.name || '');
     setDesignation(authUser.designation || '');
     setEmail(authUser.email || '');
-    setDob(authUser.dob || '');
-    setPinCode(authUser.pinCode || '');
-    setLicBranch(authUser.licBranch || '');
+    setDob(fields.dob || '');
+    setPinCode(fields.pinCode || '');
+    setLicBranch(fields.licBranch || '');
     if (!isEditing) setProfileImage(null);
   }, [authUser, isEditing]);
 
   useEffect(() => {
     let active = true;
-    loadAppSettings().then((next) => active && setSettings(next));
-    loadClients().then((clients) => {
+    loadAppSettings({ onUpdate: (next) => active && setSettings(next) }).then((next) => active && setSettings(next));
+    const showClients = (clients) => {
       if (!active) return;
       setClientStats({
         clients: clients.length,
         policies: clients.filter((client) => client.policyNo).length,
       });
-    });
+    };
+    loadClients({ onCached: showClients }).then(showClients);
     return () => {
       active = false;
     };
@@ -157,16 +166,18 @@ const MyProfileScreen = ({ navigation }) => {
   }, []);
 
   const handleSaveProfile = async () => {
+    if (profileSaveRef.current) return;
     if (!name.trim()) {
       Alert.alert('Required', 'Please enter your Full Name.');
       return;
     }
     setLoading(true);
+    profileSaveRef.current = true;
     try {
       const imagePayload = profileImage?.uri ? {
         profileImage,
       } : {};
-      const res = await updateProfile({
+      const submitted = {
         name: name.trim(),
         designation: designation.trim(),
         email: email.trim(),
@@ -174,41 +185,17 @@ const MyProfileScreen = ({ navigation }) => {
         pinCode: pinCode.trim(),
         licBranch: licBranch.trim(),
         ...imagePayload,
-      });
-      const updatedUser =
-        res.data?.user ||
-        (res.data?.success && typeof res.data.success === 'object' ? res.data.success : null) ||
-        (res.data?.name || res.data?.mobile ? res.data : null);
-      const optimisticImage = profileImage?.uri || '';
-      if (updatedUser) {
-        const nextUser = { ...authUser, ...updatedUser };
-        if (optimisticImage && !getProfileImageUrl(updatedUser)) {
-          nextUser.profileImage = optimisticImage;
-        }
-        await login(nextUser, token);
-        setIsEditing(false);
-        setProfileImage(null);
-        Alert.alert('Success', 'Profile updated successfully.');
-      } else {
-        await login({
-          ...authUser,
-          name: name.trim(),
-          designation: designation.trim(),
-          email: email.trim(),
-          dob: dob.trim(),
-          pinCode: pinCode.trim(),
-          licBranch: licBranch.trim(),
-          ...(optimisticImage ? { profileImage: optimisticImage } : {}),
-        }, token);
-        setIsEditing(false);
-        setProfileImage(null);
-        Alert.alert('Success', res.data?.message || 'Profile updated successfully.');
-      }
+      };
+      await saveProfileChanges(submitted);
+      setIsEditing(false);
+      setProfileImage(null);
+      Alert.alert('Saved on this phone', 'Your profile has been saved on this phone. Account sync will complete when the server is reachable.');
     } catch (err) {
       const errMsg = err.data?.error || err.data?.message || err.message || 'Something went wrong.';
       Alert.alert('Error', errMsg);
     } finally {
       setLoading(false);
+      profileSaveRef.current = false;
     }
   };
 
@@ -220,16 +207,18 @@ const MyProfileScreen = ({ navigation }) => {
 
     try {
       const image = await PolicyBhandarProfileImagePicker.pickImage();
-      if (image?.uri) {
-        setProfileImage({
-          uri: image.uri,
-          name: image.name || `profile-${Date.now()}.jpg`,
-          type: image.type || 'image/jpeg',
-        });
-      }
+      if (image?.uri) setCropImage(image);
     } catch (error) {
       Alert.alert('Image selection failed', error?.message || 'Unable to select profile image.');
     }
+  };
+
+  const handleCropExistingImage = async () => {
+    if (!profileImageUri || imageLoading) return;
+    setImageLoading(true);
+    try { setCropImage(await PolicyBhandarProfileImagePicker.prepareImage(profileImageUri)); }
+    catch (error) { Alert.alert('Image unavailable', error?.message || 'Please select the image again.'); }
+    finally { setImageLoading(false); }
   };
 
   const handleLogout = async () => {
@@ -364,6 +353,12 @@ const MyProfileScreen = ({ navigation }) => {
               <Text style={styles.changePhotoText}>Change Photo</Text>
             </TouchableOpacity>
           ) : null}
+          {isEditing && profileImageUri ? (
+            <TouchableOpacity style={styles.changePhotoBtn} onPress={handleCropExistingImage} disabled={imageLoading || loading}>
+              {imageLoading ? <ActivityIndicator color="#fff" size="small" /> : <MaterialIcons name="crop" size={15} color="#fff" />}
+              <Text style={styles.changePhotoText}>Crop Photo / Logo</Text>
+            </TouchableOpacity>
+          ) : null}
           <Text style={styles.userName}>{isEditing ? (name || displayName).toUpperCase() : displayName}</Text>
           <Text style={styles.userRole}>{isEditing ? designation || designationText : designationText}</Text>
           <View style={styles.planPill}>
@@ -380,6 +375,14 @@ const MyProfileScreen = ({ navigation }) => {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Personal Information</Text>
+          {authUser._pendingProfilePatch ? <View style={{ padding: 14, backgroundColor: '#FFF7E6' }}>
+            <Text style={{ color: '#333' }}>Saved on this phone · {authUser._profileSyncStatus === 'blocked' ? 'Account sync needs attention' : 'Account sync pending'}</Text>
+            {authUser._profileSyncError ? <Text style={{ color: Colors.textGray, marginTop: 5 }}>{authUser._profileSyncError}</Text> : null}
+            <TouchableOpacity disabled={syncLoading} onPress={async () => {
+              setSyncLoading(true);
+              try { await refreshProfile({ force: true }); } finally { setSyncLoading(false); }
+            }}><Text style={{ color: Colors.primary, marginTop: 8 }}>{syncLoading ? 'Syncing...' : 'Retry sync'}</Text></TouchableOpacity>
+          </View> : null}
           {isEditing ? (
             <>
               <EditField icon="person" label="Full Name" value={name} onChangeText={setName} />
@@ -526,6 +529,7 @@ const MyProfileScreen = ({ navigation }) => {
           )}
         </TouchableOpacity>
       </ScrollView>
+      <ProfileImageCropModal image={cropImage} onCancel={() => setCropImage(null)} onConfirm={(image) => { setProfileImage(image); setCropImage(null); }} />
     </View>
   );
 };

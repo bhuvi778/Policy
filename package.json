@@ -21,6 +21,7 @@
     "react-native-worklets": "^0.9.1"
   },
   "scripts": {
+    "test:media": "node --test tests/media-exports.test.cjs",
     "start": "react-native start",
     "seed:materials": "node scripts/seed-policybhandar-materials.mjs",
     "seed:materials:dry-run": "node scripts/seed-policybhandar-materials.mjs --dry-run",

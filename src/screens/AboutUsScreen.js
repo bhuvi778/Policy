@@ -136,7 +136,10 @@ const AboutUsScreen = ({ navigation }) => {
   const [settings, setSettings] = useState(null);
 
   useEffect(() => {
-    loadAppSettings().then(setSettings);
+    let active = true;
+    const show = (next) => { if (active) setSettings(next); };
+    loadAppSettings({ onUpdate: show }).then(show);
+    return () => { active = false; };
   }, []);
 
   const brandName = settings?.brandName || BRAND.name;

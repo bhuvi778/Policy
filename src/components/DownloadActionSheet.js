@@ -12,6 +12,7 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
+import useMediaExportProgress from '../hooks/useMediaExportProgress';
 
 const ActionRow = ({ icon, iconLib = 'MaterialIcons', title, subtitle, onPress, disabled }) => {
   const Icon = iconLib === 'Ionicons' ? Ionicons : MaterialIcons;
@@ -44,6 +45,7 @@ const DownloadActionSheet = ({
   onWhatsApp,
 }) => {
   const insets = useSafeAreaInsets();
+  const progressLabel = useMediaExportProgress(loading);
 
   return (
     <Modal
@@ -59,7 +61,7 @@ const DownloadActionSheet = ({
           <View style={styles.headerRow}>
             <View style={styles.headerCopy}>
               <Text style={styles.title}>{title}</Text>
-              <Text style={styles.subtitle}>Choose how you want to use this file.</Text>
+              <Text style={styles.subtitle}>{loading ? progressLabel : 'Choose how you want to use this file.'}</Text>
             </View>
             {loading ? (
               <ActivityIndicator color={Colors.primary} />

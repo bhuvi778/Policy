@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { View, ScrollView, StyleSheet, Alert, ActivityIndicator, Text, Modal, Pressable, TouchableOpacity, Image, InteractionManager } from 'react-native';
+import { View, ScrollView, FlatList, StyleSheet, Alert, ActivityIndicator, Text, Modal, Pressable, TouchableOpacity, Image, InteractionManager, AppState } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Header from '../components/Header';
 import BannerCarousel from '../components/BannerCarousel';
@@ -30,15 +30,13 @@ import {
 } from '../services/materialServiceTree';
 import { getMaterialSubcategories } from '../services/api';
 import { getMediaUrl, isImageUrl, isVideoUrl } from '../utils/material';
+import { sectionsHaveContent } from '../utils/contentState';
 const EMPTY_SECTIONS = createEmptySectionState();
 const HOME_BANNER_LIMIT = 5;
 const HOME_ROW_PREVIEW_LIMIT = 8;
 const HOME_INITIAL_BANNER_GROUP_LIMIT = 8;
 const HOME_BANNER_GROUP_DISPLAY_LIMIT = 18;
 const LAST_HOME_SCOPE_KEY = '@policybhandar_last_home_scope_v1';
-
-const sectionsHaveContent = (sectionState = {}) =>
-  Object.values(sectionState || {}).some((items) => Array.isArray(items) && items.length > 0);
 
 const getScopeCacheKey = (scope = {}) => [
   normalizeProfileRole(scope.profileRole) || 'agent',
@@ -252,6 +250,8 @@ const getPlanRoles = (user = {}) => {
 
 const HomeScreen = ({ navigation }) => {
   const { user: authUser, logout, refreshProfile } = useAuth();
+  const authUserRef = useRef(authUser);
+  authUserRef.current = authUser;
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [scopePickerOpen, setScopePickerOpen] = useState(false);
@@ -280,6 +280,7 @@ const HomeScreen = ({ navigation }) => {
   const lastServiceRefreshRef = useRef(0);
   const activeScopeKeyRef = useRef('');
   const contentRequestRef = useRef(0);
+  const lastContentRefreshRef = useRef(0);
   const subscription = getSubscriptionInfo(authUser || {});
   const allowedPlanRoles = useMemo(() => getPlanRoles(authUser || {}), [authUser]);
   const effectiveHomeRole = homeScope?.profileRole || allowedPlanRoles[0] || getUserProfileRole(authUser || {}) || 'agent';
@@ -291,6 +292,7 @@ const HomeScreen = ({ navigation }) => {
     const shouldFetchAll = false;
     const preferCacheFirst = !showAlert && (silent || isScopedHome);
     const requestId = ++contentRequestRef.current;
+    lastContentRefreshRef.current = Date.now();
     if (!silent) setLoading(true);
     if (!silent) setError('');
     try {
@@ -299,16 +301,23 @@ const HomeScreen = ({ navigation }) => {
         includeTaxonomy: true,
         forceFreshTaxonomy: showAlert,
         fetchAll: shouldFetchAll,
-        useCached: !showAlert,
+        useCached: true,
         preferCacheFirst,
         scopedLimit: 160,
         scopedMaxPages: isScopedHome ? 3 : 2,
         maxDirectQueries: isScopedHome ? 18 : undefined,
         forceFreshMaterials: showAlert,
-        user: authUser,
+        user: authUserRef.current,
         profileRole: effectiveHomeRole,
         categoryId: homeScope?.categoryId || '',
         subcategoryId: homeScope?.subcategoryId || '',
+        onPartial: (partial) => {
+          if (requestId !== contentRequestRef.current || !sectionsHaveContent(partial.sections)) return;
+          setSections(partial.sections);
+          setHasContentLoaded(true);
+          setLoading(false);
+          setError('');
+        },
       });
       if (requestId !== contentRequestRef.current) return;
       const nextSections = content?.sections || EMPTY_SECTIONS;
@@ -318,13 +327,14 @@ const HomeScreen = ({ navigation }) => {
       }
       setSections((currentSections) => {
         const currentHasContent = sectionsHaveContent(currentSections);
-        if (!nextHasContent && currentHasContent && silent) {
+        if (!nextHasContent && currentHasContent && content?.source !== 'backend') {
           return currentSections;
         }
         return nextSections;
       });
       setHasContentLoaded(true);
-      if (showAlert) Alert.alert('Refresh', 'Latest POLICYBHANDAR content loaded.');
+      setError(content?.source === 'unavailable' ? 'The content server is not responding. Please retry in a moment.' : '');
+      if (showAlert) Alert.alert('Refresh', content?.source === 'backend' ? 'Latest POLICYBHANDAR content loaded.' : 'Could not refresh content. Showing saved content where available.');
 
       if ((content?.source === 'cache' && (isScopedHome || isRoleOnlyScope)) || (!silent && isRoleOnlyScope)) {
         loadHomeContent({}, {
@@ -337,7 +347,7 @@ const HomeScreen = ({ navigation }) => {
           scopedMaxPages: isScopedHome ? 3 : 2,
           maxDirectQueries: isScopedHome ? 18 : undefined,
           forceFreshMaterials: false,
-          user: authUser,
+          user: authUserRef.current,
           profileRole: effectiveHomeRole,
           categoryId: homeScope?.categoryId || '',
           subcategoryId: homeScope?.subcategoryId || '',
@@ -360,7 +370,7 @@ const HomeScreen = ({ navigation }) => {
           fetchAll: false,
           useCached: false,
           forceFreshMaterials: false,
-          user: authUser,
+          user: authUserRef.current,
           profileRole: effectiveHomeRole,
           categoryId: homeScope?.categoryId || '',
           subcategoryId: homeScope?.subcategoryId || '',
@@ -381,10 +391,12 @@ const HomeScreen = ({ navigation }) => {
       if (!silent) setError(err.message || 'Unable to load content right now.');
       if (showAlert) Alert.alert('Refresh failed', err.message || 'Unable to load content right now.');
     } finally {
-      setHasContentLoaded(true);
-      if (!silent) setLoading(false);
+      if (requestId === contentRequestRef.current) {
+        setHasContentLoaded(true);
+        if (!silent) setLoading(false);
+      }
     }
-  }, [authUser, effectiveHomeRole, homeScope]);
+  }, [effectiveHomeRole, homeScope]);
 
   useEffect(() => {
     let active = true;
@@ -408,7 +420,7 @@ const HomeScreen = ({ navigation }) => {
       };
     }
 
-    loadAnyCachedHomeContent({ user: authUser, profileRole: effectiveHomeRole })
+    loadAnyCachedHomeContent({ user: authUserRef.current, profileRole: effectiveHomeRole })
       .then((cached) => {
         if (active && cached?.sections) {
           setSections(cached.sections);
@@ -428,14 +440,21 @@ const HomeScreen = ({ navigation }) => {
       active = false;
       if (timer) clearTimeout(timer);
     };
-  }, [authUser, effectiveHomeRole, homeScope, loadContent, subscription.active]);
+  }, [effectiveHomeRole, homeScope, loadContent, subscription.active]);
 
   useEffect(() => {
-    const unsubscribe = navigation.addListener?.('focus', () => {
+    const refreshOnReturn = () => {
       refreshProfile?.();
+      if ((homeScope || !subscription.active) && Date.now() - lastContentRefreshRef.current > 30000) {
+        loadContent({ silent: true });
+      }
+    };
+    const unsubscribe = navigation.addListener?.('focus', refreshOnReturn);
+    const appStateListener = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && navigation.isFocused?.()) refreshOnReturn();
     });
-    return unsubscribe;
-  }, [navigation, refreshProfile]);
+    return () => { unsubscribe?.(); appStateListener.remove(); };
+  }, [navigation, refreshProfile, loadContent, homeScope, subscription.active]);
 
   useEffect(() => {
     if (!subscription.active || !authUser || scopePickerShown || !scopeRestoreChecked) return;
@@ -467,7 +486,7 @@ const HomeScreen = ({ navigation }) => {
       }));
     };
 
-    const showGroups = (groups = []) => {
+    const showGroups = (groups = [], fromCache = false) => {
       if (!active || !groups.length) return;
       showedAny = true;
       const visibleGroups = groups.map((group) => ({ ...group, loading: false }));
@@ -476,28 +495,28 @@ const HomeScreen = ({ navigation }) => {
         const currentHasTree = current.some((group) => Array.isArray(group.tree) && group.tree.length);
         return !nextHasTree && currentHasTree ? current : visibleGroups;
       });
-      primeCategoryMapFromServiceTree(visibleGroups);
+      primeCategoryMapFromServiceTree(visibleGroups, { fresh: !fromCache });
       rememberExpandedGroups(visibleGroups);
     };
 
     const defaultGroups = getDefaultMaterialServiceTree();
-    showGroups(defaultGroups);
-    loadCachedMaterialServiceTree({ allowStale: true }).then(showGroups).catch(() => {});
+    showGroups(defaultGroups, true);
+    loadCachedMaterialServiceTree({ allowStale: true }).then((groups) => showGroups(groups, true)).catch(() => {});
     fallbackTimer = setTimeout(() => {
-      if (!showedAny) showGroups(defaultGroups);
+      if (!showedAny) showGroups(defaultGroups, true);
     }, 700);
 
     lastServiceRefreshRef.current = Date.now();
     fetchMaterialServiceTree({
       timeout: 9000,
       forceRefresh: false,
-      onPartial: (groups) => {
-        showGroups(groups);
+      onPartial: (groups, metadata) => {
+        showGroups(groups, metadata?.source === 'cache');
       },
     })
       .then((groups) => {
         if (!active) return;
-        if (groups.length) showGroups(groups);
+        if (groups.length) showGroups(groups, groups.source === 'cache');
         setServicesLoaded(true);
       })
       .catch((err) => {
@@ -519,7 +538,7 @@ const HomeScreen = ({ navigation }) => {
       active = false;
       if (fallbackTimer) clearTimeout(fallbackTimer);
     };
-  }, [servicesLoaded, servicesLoading, subscription.active]);
+  }, [servicesLoaded, subscription.active]);
 
   useEffect(() => {
     if (!subscription.active || !scopePickerOpen || servicesLoading) return undefined;
@@ -570,7 +589,7 @@ const HomeScreen = ({ navigation }) => {
     return () => {
       active = false;
     };
-  }, [scopePickerOpen, servicesLoading, subscription.active]);
+  }, [scopePickerOpen, servicesLoaded, subscription.active]);
 
   useEffect(() => {
     let timer = null;
@@ -730,7 +749,7 @@ const HomeScreen = ({ navigation }) => {
     const tiles = [
       { id: 'recent', title: 'Recent', data: allTextItems.filter((item) => !isVideoContentItem(item)), active: true },
       { id: 'bannersImages', title: 'Banners (Images)', data: uniqueItems([...groupedBannerItems, ...imageItems, ...fallbackSliderBanners]) },
-      { id: 'reels', title: 'Reels & Videos', data: uniqueItems(sections.freeAiVideos || []) },
+      { id: 'reels', title: 'Reels & Videos', data: uniqueItems([...(sections.freeAiVideos || []), ...groupedItems.filter(isVideoContentItem)]) },
       { id: 'pdfs', title: 'PDFs & Brochures', data: pdfItems },
       { id: 'presentations', title: 'PPT Presentations', data: uniqueItems(presentationItems) },
     ];
@@ -834,13 +853,13 @@ const HomeScreen = ({ navigation }) => {
       setHasContentLoaded(false);
       const cachePromise = nextScope.categoryId || nextScope.subcategoryId
         ? loadCachedScopedHomeContent({
-          user: authUser,
+          user: authUserRef.current,
           profileRole: nextScope.profileRole,
           categoryId: nextScope.categoryId,
           subcategoryId: nextScope.subcategoryId,
         })
         : loadAnyCachedHomeContent({
-          user: authUser,
+          user: authUserRef.current,
           profileRole: nextScope.profileRole,
         });
       cachePromise
@@ -852,7 +871,7 @@ const HomeScreen = ({ navigation }) => {
         })
         .catch(() => {});
     }
-  }, [authUser]);
+  }, []);
 
   useEffect(() => {
     if (!subscription.active || !authUser || scopePickerShown) return undefined;
@@ -1017,14 +1036,30 @@ const HomeScreen = ({ navigation }) => {
     },
   };
 
+  const homeRows = useMemo(() => {
+    const groups = visibleBannerGroups.filter((group) => group?.data?.length || scopedHomeActive).map((group, index) => {
+      const title = group.title || group.bannerGroupTitle || homeScope?.label || 'Templates ' + (index + 1);
+      const data = Array.isArray(group.data) ? group.data : [];
+      return { id: 'group:' + (group.id || title), title, data, previewData: group.previewData?.length ? group.previewData : data.slice(0, HOME_ROW_PREVIEW_LIMIT) };
+    });
+    if (scopedHomeActive) return groups;
+    const standard = [
+      ['recentUpdates', 'Recent Updates'], ['dailyMotivation', 'Daily Motivation'], ['birthday', 'Birthday'],
+      ['anniversary', 'Anniversary'], ['festival', 'Festival'], ['specialDays', 'Monthly Days'],
+      ['concepts', 'Concepts'], ['knowledge', 'Knowledge Centre'], ['news', 'News & Articles'],
+      ['licplans', 'LIC Plans'], ['digitalCards', 'Digital Cards'],
+    ].filter(([key]) => sections[key]?.length).map(([key, title]) => ({ id: key, title, data: sections[key], previewData: sections[key].slice(0, HOME_ROW_PREVIEW_LIMIT) }));
+    return [...groups, ...standard];
+  }, [visibleBannerGroups, scopedHomeActive, sections, homeScope?.label]);
+
   return (
     <View style={styles.root}>
       <Header
         onMenuPress={() => setDrawerOpen(true)}
         onSearchPress={() => navigation.navigate('Search')}
         onRefreshPress={async () => {
-          await invalidateHomeContentCache().catch(() => {});
-          await fetchMaterialServiceTree({
+          loadContent({ showAlert: true, silent: false });
+          fetchMaterialServiceTree({
             timeout: 9000,
             forceRefresh: true,
             onPartial: (groups) => {
@@ -1033,182 +1068,34 @@ const HomeScreen = ({ navigation }) => {
               primeCategoryMapFromServiceTree(groups);
             },
           }).catch(() => {});
-          setServicesLoaded(false);
-          loadContent({ showAlert: true, silent: false });
         }}
         onNotificationPress={() => navigation.navigate('Notifications')}
         notificationCount={notificationCount}
       />
 
-      <ScrollView
-        style={styles.scroll}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContent}
-        overScrollMode="never"
-      >
-        {error ? (
-          <View style={styles.statusBar}>
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
-        ) : null}
-
-        {loading ? (
-          <View style={styles.loaderWrap}>
-            <ActivityIndicator size="small" color={Colors.primary} />
-            <Text style={styles.statusText}>Refreshing latest POLICYBHANDAR content...</Text>
-          </View>
-        ) : null}
-
-        {subscription.active ? (
-          <View style={styles.scopeBar}>
-            <View style={styles.scopeBarCopy}>
-              <Text style={styles.scopeBarLabel}>Showing</Text>
-              <Text style={styles.scopeBarTitle} numberOfLines={1}>
-                {homeScope?.label || `${roleTitle(effectiveHomeRole)} home`}
-              </Text>
-            </View>
-            <TouchableOpacity style={styles.scopeChangeBtn} onPress={openScopePicker} activeOpacity={0.82}>
-              <MaterialIcons name="tune" size={17} color={Colors.primary} />
-              <Text style={styles.scopeChangeText}>Change</Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
-
-        {shouldShowEmptyState ? (
-          <View style={styles.emptyWrap}>
-            <Text style={styles.emptyText}>No content available right now.</Text>
-          </View>
-        ) : (
-          <>
+      <FlatList
+        style={styles.scroll} contentContainerStyle={styles.scrollContent}
+        data={shouldShowEmptyState ? [] : homeRows} keyExtractor={(row) => row.id}
+        renderItem={({ item: row }) => <ContentGrid title={row.title} data={row.previewData} onViewAll={() => handleViewAll(row.title, row.data)} onItemPress={(item) => handleMediaPress(item, row.title)} />}
+        initialNumToRender={2} maxToRenderPerBatch={2} windowSize={5}
+        onEndReached={() => setVisibleGroupLimit((current) => Math.min((sections.bannerGroups || []).length, current + HOME_BANNER_GROUP_DISPLAY_LIMIT))}
+        onEndReachedThreshold={0.5}
+        showsVerticalScrollIndicator={false} overScrollMode="never"
+        ListHeaderComponent={<>
+          {!!error && <View style={styles.statusBar}><Text style={styles.errorText}>{error}</Text></View>}
+          {loading && <View style={styles.loaderWrap}><ActivityIndicator size="small" color={Colors.primary} /><Text style={styles.statusText}>Refreshing latest POLICYBHANDAR content...</Text></View>}
+          {subscription.active && <View style={styles.scopeBar}>
+            <View style={styles.scopeBarCopy}><Text style={styles.scopeBarLabel}>Showing</Text><Text style={styles.scopeBarTitle} numberOfLines={1}>{homeScope?.label || roleTitle(effectiveHomeRole) + ' home'}</Text></View>
+            <TouchableOpacity style={styles.scopeChangeBtn} onPress={openScopePicker} activeOpacity={0.82}><MaterialIcons name="tune" size={17} color={Colors.primary} /><Text style={styles.scopeChangeText}>Change</Text></TouchableOpacity>
+          </View>}
+          {shouldShowEmptyState ? <View style={styles.emptyWrap}><Text style={styles.emptyText}>{error || 'No content is available in this section yet.'}</Text><TouchableOpacity onPress={() => loadContent({ silent: false, showAlert: true })}><Text style={{ color: Colors.primary, marginTop: 12 }}>Retry</Text></TouchableOpacity></View> : <>
             {visibleBanners.length ? <BannerCarousel banners={visibleBanners} /> : (!hasContentLoaded || loading ? <BannerSkeleton /> : null)}
             <FeatureCards onCardPress={handleFeatureCardPress} />
-            <ContentTypeTiles
-              tiles={contentTypeTiles}
-              onPress={(tile) => handleContentTypePress(tile, contentTypeTiles)}
-            />
-
-            {visibleBannerGroups.map((group, index) => {
-              if (!group?.data?.length && !scopedHomeActive) return null;
-              const groupTitle = group.title || group.bannerGroupTitle || homeScope?.label || `Templates ${index + 1}`;
-              const previewData = Array.isArray(group.previewData) && group.previewData.length
-                ? group.previewData
-                : (Array.isArray(group.data) ? group.data.slice(0, HOME_ROW_PREVIEW_LIMIT) : []);
-              return (
-                <ContentGrid
-                  key={group.id || groupTitle}
-                  title={groupTitle}
-                  data={previewData}
-                  onViewAll={() => handleViewAll(groupTitle, Array.isArray(group.data) ? group.data : [])}
-                  onItemPress={(item) => handleMediaPress(item, groupTitle)}
-                />
-              );
-            })}
-
-            {!scopedHomeActive && sections.recentUpdates.length ? (
-              <ContentGrid
-                title="Recent Updates"
-                data={sections.recentUpdates}
-                onViewAll={() => handleViewAll('Recent Updates', sections.recentUpdates)}
-                onItemPress={(item) => handleMediaPress(item, 'Recent Updates')}
-              />
-            ) : null}
-
-            {!scopedHomeActive && sections.dailyMotivation.length ? (
-              <ContentGrid
-                title="Daily Motivation"
-                data={sections.dailyMotivation}
-                onViewAll={() => handleViewAll('Daily Motivation', sections.dailyMotivation)}
-                onItemPress={(item) => handleMediaPress(item, 'Daily Motivation')}
-              />
-            ) : null}
-
-            {!scopedHomeActive && sections.birthday.length ? (
-              <ContentGrid
-                title="Birthday"
-                data={sections.birthday}
-                onViewAll={() => handleViewAll('Birthday', sections.birthday)}
-                onItemPress={(item) => handleMediaPress(item, 'Birthday')}
-              />
-            ) : null}
-
-            {!scopedHomeActive && sections.anniversary.length ? (
-              <ContentGrid
-                title="Anniversary"
-                data={sections.anniversary}
-                onViewAll={() => handleViewAll('Anniversary', sections.anniversary)}
-                onItemPress={(item) => handleMediaPress(item, 'Anniversary')}
-              />
-            ) : null}
-
-            {!scopedHomeActive && sections.festival.length ? (
-              <ContentGrid
-                title="Festival"
-                data={sections.festival}
-                onViewAll={() => handleViewAll('Festival', sections.festival)}
-                onItemPress={(item) => handleMediaPress(item, 'Festival')}
-              />
-            ) : null}
-
-            {!scopedHomeActive && sections.specialDays.length ? (
-              <ContentGrid
-                title="Monthly Days"
-                data={sections.specialDays}
-                onViewAll={() => handleViewAll('Monthly Days', sections.specialDays)}
-                onItemPress={(item) => handleMediaPress(item, 'Monthly Days')}
-              />
-            ) : null}
-
-            {!scopedHomeActive && sections.concepts.length ? (
-              <ContentGrid
-                title="Concepts"
-                data={sections.concepts}
-                onViewAll={() => handleViewAll('Concepts', sections.concepts)}
-                onItemPress={(item) => handleMediaPress(item, 'Concepts')}
-              />
-            ) : null}
-
-            {!scopedHomeActive && sections.knowledge.length ? (
-              <ContentGrid
-                title="Knowledge Centre"
-                data={sections.knowledge}
-                onViewAll={() => handleViewAll('Knowledge Centre', sections.knowledge)}
-                onItemPress={(item) => handleMediaPress(item, 'Knowledge Centre')}
-              />
-            ) : null}
-
-            {!scopedHomeActive && sections.news.length ? (
-              <ContentGrid
-                title="News & Articles"
-                data={sections.news}
-                onViewAll={() => handleViewAll('News & Articles', sections.news)}
-                onItemPress={(item) => handleMediaPress(item, 'News & Articles')}
-              />
-            ) : null}
-
-            {!scopedHomeActive && sections.licplans.length ? (
-              <ContentGrid
-                title="LIC Plans"
-                data={sections.licplans}
-                onViewAll={() => handleViewAll('LIC Plans', sections.licplans)}
-                onItemPress={(item) => handleMediaPress(item, 'LIC Plans')}
-              />
-            ) : null}
-
-            {!scopedHomeActive && sections.digitalCards.length ? (
-              <ContentGrid
-                title="Digital Cards"
-                data={sections.digitalCards}
-                onViewAll={() => handleViewAll('Digital Cards', sections.digitalCards)}
-                onItemPress={(item) => handleMediaPress(item, 'Digital Cards')}
-              />
-            ) : null}
-
-            {!hasAnyContent ? <LoadingRows loaded={hasContentLoaded} /> : null}
-          </>
-        )}
-
-        <View style={styles.bottomPad} />
-      </ScrollView>
+            <ContentTypeTiles tiles={contentTypeTiles} onPress={(tile) => handleContentTypePress(tile, contentTypeTiles)} />
+          </>}
+        </>}
+        ListFooterComponent={<>{!hasAnyContent && !shouldShowEmptyState && <LoadingRows loaded={hasContentLoaded} />}<View style={styles.bottomPad} /></>}
+      />
 
       <FloatingBar
         onMenuPress={() => setMenuOpen(true)}

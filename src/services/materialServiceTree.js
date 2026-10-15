@@ -9,7 +9,6 @@ let serviceTreeMemorySavedAt = 0;
 let serviceTreePromise = null;
 const SERVICE_TREE_TIMEOUT_MS = 7000;
 const SERVICE_TREE_CACHE_TTL_MS = 15 * 60 * 1000;
-const SERVICE_TREE_STALE_TTL_MS = 24 * 60 * 60 * 1000;
 
 const DEFAULT_SERVICE_TREE = [
   {
@@ -307,12 +306,10 @@ export const getDefaultMaterialServiceTree = () =>
     .map((group) => ({ ...group, loading: false }));
 
 const withHardTimeout = (promise, timeout = SERVICE_TREE_TIMEOUT_MS) =>
-  Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Service tree request timed out.')), timeout);
-    }),
-  ]);
+  new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Service tree request timed out.')), timeout);
+    Promise.resolve(promise).then(resolve, reject).finally(() => clearTimeout(timer));
+  });
 
 export const loadCachedMaterialServiceTree = async ({ allowStale = false } = {}) => {
   try {
@@ -322,7 +319,7 @@ export const loadCachedMaterialServiceTree = async ({ allowStale = false } = {})
       if (!raw) continue;
       const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
       const savedAt = Number(parsed?.savedAt || 0);
-      const maxAge = allowStale ? SERVICE_TREE_STALE_TTL_MS : SERVICE_TREE_CACHE_TTL_MS;
+      const maxAge = allowStale ? Infinity : SERVICE_TREE_CACHE_TTL_MS;
       if (!savedAt || Date.now() - savedAt > maxAge) continue;
       const groups = sanitizeGroups(parsed?.groups || []);
       if (groups.length) return groups;
@@ -346,39 +343,33 @@ export const fetchMaterialServiceTree = async ({ onPartial, timeout = 9000, forc
     return finalGroups;
   }
 
-  const cached = await loadCachedMaterialServiceTree({ allowStale: true });
-  if (cached.length) onPartial?.(cached.map((group) => ({ ...group, loading: false })));
-
   serviceTreePromise = (async () => {
+    const cached = await loadCachedMaterialServiceTree({ allowStale: true });
+    const savedGroups = cached.length ? cached : getDefaultMaterialServiceTree();
+    if (cached.length) onPartial?.(cached.map((group) => ({ ...group, loading: false })), { source: 'cache' });
     const requestOptions = {
       timeout,
       token: null,
       cache: !forceRefresh,
       ...(forceRefresh ? { params: freshParams() } : {}),
     };
+    const allSubcategoriesRequest = withHardTimeout(
+      getAllMaterialSubcategories(requestOptions), timeout + 1000,
+    ).then((response) => ({ items: unwrapList(response.data) }))
+      .catch((error) => ({ items: [], error }));
     const categoryResponse = await withHardTimeout(
       getMaterialCategories(requestOptions),
       timeout + 1000,
     );
     const categories = unwrapList(categoryResponse.data);
     if (!categories.length) throw new Error('No service categories returned by backend.');
-    let groups = categories.map((category) => ({
-      category,
-      subcategories: [],
-      tree: [],
-      loading: true,
-    }));
-
-    let allSubcategories = [];
-    try {
-      const allResponse = await withHardTimeout(
-        getAllMaterialSubcategories(requestOptions),
-        timeout + 1000,
-      );
-      allSubcategories = unwrapList(allResponse.data);
-    } catch (_) {
-      allSubcategories = [];
-    }
+    let groups = categories.map((category) => {
+      const saved = savedGroups.find((group) => getId(group.category) === getId(category));
+      return { category, subcategories: saved?.subcategories || [], tree: saved?.tree || [], loading: !saved };
+    });
+    onPartial?.(groups);
+    const allResult = await allSubcategoriesRequest;
+    const allSubcategories = allResult.items;
 
     if (allSubcategories.length) {
       groups = groups.map((group) => {
@@ -392,6 +383,9 @@ export const fetchMaterialServiceTree = async ({ onPartial, timeout = 9000, forc
         };
       });
       onPartial?.(groups);
+    } else if (allResult.error && !allResult.error.response) {
+      // An unavailable server must not delete a previously saved service tree.
+      return Object.assign(groups.map((group) => ({ ...group, loading: false })), { source: 'cache' });
     } else {
       await Promise.all(categories.map(async (category) => {
         const categoryId = getId(category);
@@ -402,7 +396,9 @@ export const fetchMaterialServiceTree = async ({ onPartial, timeout = 9000, forc
             timeout + 1000,
           );
           subcategories = unwrapList(response.data);
-        } catch (_) {}
+        } catch (_) {
+          subcategories = savedGroups.find((group) => getId(group.category) === categoryId)?.subcategories || [];
+        }
 
         groups = groups.map((group) => (
           getId(group.category) === categoryId

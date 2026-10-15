@@ -1,4 +1,5 @@
 import React from 'react';
+import { getProfileImageUrl, getLogoImageUrl, getQrCodeImageUrl } from '../utils/profileAssets';
 import { StyleSheet, Text, View } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { useAuth } from '../context/AuthContext';
@@ -39,70 +40,7 @@ const firstAssetUrl = (...values) => {
   return '';
 };
 
-export const getProfileImageUrl = (user = {}) =>
-  firstAssetUrl(
-    user.profileImage,
-    user.profileImageUrl,
-    user.profilePhoto,
-    user.profilePhotoUrl,
-    user.profile_picture,
-    user.profilePic,
-    user.profile_pic,
-    user.avatar,
-    user.avatarUrl,
-    user.photo,
-    user.photoUrl,
-    user.image,
-    user.imageUrl,
-    user.profile?.profileImage,
-    user.profile?.profileImageUrl,
-    user.profile?.profilePhoto,
-    user.profile?.profilePhotoUrl,
-    user.profile?.profile_picture,
-    user.profile?.profilePic,
-    user.profile?.profile_pic,
-    user.profile?.avatar,
-    user.profile?.avatarUrl,
-    user.profile?.photo,
-    user.profile?.photoUrl,
-    user.profile?.image,
-    user.profile?.imageUrl,
-    user.user?.profileImage,
-    user.user?.profileImageUrl,
-    user.data?.profileImage,
-    user.data?.profileImageUrl,
-  );
-
-export const getLogoImageUrl = (user = {}) =>
-  firstAssetUrl(
-    user.logoUrl,
-    user.logo,
-    user.companyLogo,
-    user.companyLogoUrl,
-    user.businessLogo,
-    user.profileLogo,
-    user.profile?.logoUrl,
-    user.profile?.logo,
-    user.company?.logoUrl,
-    user.company?.logo,
-  );
-
-export const getQrCodeImageUrl = (user = {}) =>
-  firstAssetUrl(
-    user.qrCodeUrl,
-    user.qrUrl,
-    user.qrImage,
-    user.whatsappScannerImage,
-    user.whatsappScannerPhoto,
-    user.whatsappScannerUrl,
-    user.profile?.qrCodeUrl,
-    user.profile?.qrUrl,
-    user.profile?.qrImage,
-    user.profile?.whatsappScannerImage,
-    user.company?.qrCodeUrl,
-    user.company?.qrUrl,
-  );
-
+export { getProfileImageUrl, getLogoImageUrl, getQrCodeImageUrl } from '../utils/profileAssets';
 const buildQrImageUrl = (value = '') => {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -295,4 +233,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default ProfileFooterPreview;
+export default React.memo(ProfileFooterPreview);

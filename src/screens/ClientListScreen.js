@@ -15,19 +15,11 @@ const ClientListScreen = ({ navigation }) => {
   const [loaded, setLoaded] = useState(false);
 
   React.useEffect(() => {
-    loadClients();
+    let active = true;
+    const show = (items) => { if (active) { setClients(items); setLoaded(true); } };
+    fetchClients({ onCached: show }).then(show).finally(() => { if (active) setLoaded(true); });
+    return () => { active = false; };
   }, []);
-
-  const loadClients = async () => {
-    try {
-      const items = await fetchClients();
-      setClients(items);
-    } catch (_) {
-      setClients([]);
-    } finally {
-      setLoaded(true);
-    }
-  };
 
   const filtered = clients.filter(c =>
     c.name?.toLowerCase().includes(search.toLowerCase()) ||
