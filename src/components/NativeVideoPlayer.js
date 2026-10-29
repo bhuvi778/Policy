@@ -2,13 +2,15 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Platform, requireNativeComponent, StyleSheet, Text, View } from 'react-native';
 import { Colors } from '../theme/colors';
 import FastImage from './FastImage';
+import { useIsFocused } from '@react-navigation/native';
 
 const NativeVideoView =
   Platform.OS === 'android' || Platform.OS === 'ios'
     ? requireNativeComponent('PolicyBhandarVideoView')
     : null;
 
-const NativeVideoPlayer = ({ source, style, thumbnailMode = false, poster = null, posterResizeMode = 'contain' }) => {
+const NativeVideoPlayer = ({ source, style, thumbnailMode = false, poster = null, posterResizeMode = 'contain', paused = false, displayAspectRatio = 0 }) => {
+  const focused = useIsFocused();
   const [loading, setLoading] = useState(!!source && !thumbnailMode);
   const [error, setError] = useState(false);
   const posterSource = typeof poster === 'string' ? { uri: poster } : poster;
@@ -45,6 +47,8 @@ const NativeVideoPlayer = ({ source, style, thumbnailMode = false, poster = null
         />
       ) : null}
       <NativeVideoView
+        {...(Platform.OS === 'android' ? { displayAspectRatio } : {})}
+        paused={paused || !focused}
         thumbnailMode={thumbnailMode}
         source={source}
         style={StyleSheet.absoluteFill}

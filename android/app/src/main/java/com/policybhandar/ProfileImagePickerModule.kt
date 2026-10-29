@@ -2,6 +2,10 @@ package com.policybhandar
 
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.facebook.react.bridge.ActivityEventListener
@@ -11,11 +15,17 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import java.io.File
+import java.util.concurrent.Executors
+import kotlin.math.max
+import kotlin.math.min
 
 class ProfileImagePickerModule(private val reactContext: ReactApplicationContext) :
   ReactContextBaseJavaModule(reactContext) {
 
   private var pendingPromise: Promise? = null
+  private val worker = Executors.newSingleThreadExecutor()
+  private val assets = MediaAssetStore(reactContext)
 
   private val activityEventListener: ActivityEventListener = object : BaseActivityEventListener() {
     override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
@@ -44,11 +54,7 @@ class ProfileImagePickerModule(private val reactContext: ReactApplicationContext
         // Some pickers return temporary read grants only; React Native can still upload them.
       }
 
-      val result = Arguments.createMap()
-      result.putString("uri", uri.toString())
-      result.putString("name", getDisplayName(uri))
-      result.putString("type", reactContext.contentResolver.getType(uri) ?: "image/jpeg")
-      promise.resolve(result)
+      prepareImage(uri.toString(), promise)
     }
   }
 
@@ -57,6 +63,59 @@ class ProfileImagePickerModule(private val reactContext: ReactApplicationContext
   }
 
   override fun getName(): String = "PolicyBhandarProfileImagePicker"
+
+  @ReactMethod
+  fun prepareImage(uri: String, promise: Promise) {
+    worker.execute {
+      try {
+        val bitmap = assets.bitmap(uri)
+        try { promise.resolve(saveImage(bitmap)) } finally { bitmap.recycle() }
+      } catch (error: Exception) { promise.reject("IMAGE_PREPARE_FAILED", error.message, error) }
+    }
+  }
+
+  @ReactMethod
+  fun cropImage(uri: String, x: Double, y: Double, width: Double, height: Double, fitWholeImage: Boolean, promise: Promise) {
+    worker.execute {
+      var source: Bitmap? = null
+      var output: Bitmap? = null
+      try {
+        source = assets.bitmap(uri)
+        output = Bitmap.createBitmap(1024, 1024, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        if (fitWholeImage) {
+          val scale = min(1024f / source.width, 1024f / source.height)
+          val w = source.width * scale
+          val h = source.height * scale
+          canvas.drawBitmap(source, null, RectF((1024 - w) / 2, (1024 - h) / 2, (1024 + w) / 2, (1024 + h) / 2), paint)
+        } else {
+          require(listOf(x, y, width, height).all { it.isFinite() }) { "Invalid crop area." }
+          val left = (x.coerceIn(0.0, 1.0) * source.width).toInt().coerceIn(0, source.width - 1)
+          val top = (y.coerceIn(0.0, 1.0) * source.height).toInt().coerceIn(0, source.height - 1)
+          val w = max(1, (width.coerceIn(0.0, 1.0) * source.width).toInt()).coerceAtMost(source.width - left)
+          val h = max(1, (height.coerceIn(0.0, 1.0) * source.height).toInt()).coerceAtMost(source.height - top)
+          canvas.drawBitmap(source, android.graphics.Rect(left, top, left + w, top + h), RectF(0f, 0f, 1024f, 1024f), paint)
+        }
+        promise.resolve(saveImage(output))
+      } catch (error: Exception) { promise.reject("IMAGE_CROP_FAILED", error.message, error) }
+      finally { output?.recycle(); source?.recycle() }
+    }
+  }
+
+  private fun saveImage(bitmap: Bitmap): com.facebook.react.bridge.WritableMap {
+    // Private app files survive process restarts until the backend's canonical image is returned.
+    val directory = File(reactContext.filesDir, "profile-images").apply { mkdirs() }
+    val file = File(directory, "profile-${System.currentTimeMillis()}.png")
+    file.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+    return Arguments.createMap().apply {
+      putString("uri", Uri.fromFile(file).toString())
+      putString("name", file.name)
+      putString("type", "image/png")
+      putInt("width", bitmap.width)
+      putInt("height", bitmap.height)
+    }
+  }
 
   @ReactMethod
   fun pickImage(promise: Promise) {

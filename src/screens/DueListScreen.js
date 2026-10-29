@@ -34,8 +34,8 @@ const DueListScreen = ({ navigation }) => {
 
   const loadAndSearch = async () => {
     setLoading(true);
-    try {
-      let filtered = await loadDueClients();
+    const show = (items) => {
+      let filtered = items;
       const from = parseDateValue(fromDate);
       const to = parseDateValue(toDate);
       if (from || to) {
@@ -55,8 +55,11 @@ const DueListScreen = ({ navigation }) => {
       }
       setClients(filtered);
       setSearched(true);
+      setLoading(false);
+    };
+    try {
+      show(await loadDueClients({ onCached: show }));
     } catch (_) {
-      setClients([]);
       setSearched(true);
     } finally {
       setLoading(false);

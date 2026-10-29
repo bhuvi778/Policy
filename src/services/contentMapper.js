@@ -2,13 +2,16 @@ import {
   getMaterials,
   getMaterialCategories,
   getMaterialSubcategories,
+  getAllMaterialSubcategories,
   createMaterial,
   BASE_URL,
 } from './api';
 import Storage from './storage';
-import { loadCachedMaterialServiceTree } from './materialServiceTree';
+import { readContentCache, writeContentCache } from './contentCacheStorage';
+import { getDefaultMaterialServiceTree, loadCachedMaterialServiceTree } from './materialServiceTree';
 import { isImageUrl, isVideoUrl } from '../utils/material';
 import templateSeedCatalog from '../data/templateSeedCatalog.json';
+import { sectionsHaveContent } from '../utils/contentState';
 
 const HOME_REQUEST_TIMEOUT_MS = 9000;
 const HOME_BATCH_LIMIT = 48;
@@ -27,10 +30,14 @@ const SEED_SUCCESS_FLAG = '@policybhandar_material_seed_success';
 const SEED_TAG = 'policybhandar-seed';
 const HOME_CACHE_KEY = '@policybhandar_home_sections_cache_v1';
 const HOME_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const HOME_CACHE_SCHEMA = 19;
+const HOME_CACHE_SCHEMA = 20;
 const CATEGORY_MAP_CACHE_KEY = '@policybhandar_material_taxonomy_cache_v7';
 const CATEGORY_MAP_CACHE_SCHEMA = 7;
 const homeSectionsMemoryCache = new Map();
+const homeCacheWrites = new Map();
+const recentMaterialRecords = new Map();
+let materialSearchIndex = null;
+let materialRecordsRevision = 0;
 const COLORS = [
   '#B71C1C',
   '#1A237E',
@@ -336,7 +343,7 @@ const normalizeCategoryMapPayload = (payload = {}) => {
   const taxonomy = payload.taxonomy || payload;
   if (!hasCategoryMapData(taxonomy)) return null;
   return {
-    fetchedAt: Number(payload.savedAt || taxonomy.fetchedAt || Date.now()),
+    fetchedAt: Number(payload.savedAt ?? taxonomy.fetchedAt ?? Date.now()),
     categories: taxonomy.categoryNames || taxonomy.categories || {},
     categoryNames: taxonomy.categoryNames || taxonomy.categories || {},
     subcategories: taxonomy.subcategoryNames || taxonomy.subcategories || {},
@@ -351,7 +358,7 @@ const normalizeCategoryMapPayload = (payload = {}) => {
 const applyCategoryMap = (taxonomy = {}) => {
   const normalized = normalizeCategoryMapPayload(taxonomy);
   if (!normalized) return categoryMapCache;
-  categoryMapCache = normalized;
+  Object.assign(categoryMapCache, normalized);
   return categoryMapCache;
 };
 
@@ -368,7 +375,7 @@ const loadCachedCategoryMap = async ({ allowStale = false } = {}) => {
       }
     }
 
-    const cachedGroups = await loadCachedMaterialServiceTree();
+    const cachedGroups = await loadCachedMaterialServiceTree({ allowStale });
     if (cachedGroups.length) return buildCategoryMapFromGroups(cachedGroups);
   } catch (_) {}
   return null;
@@ -385,11 +392,22 @@ const saveCategoryMap = async (taxonomy = {}) => {
   } catch (_) {}
 };
 
-export const primeCategoryMapFromServiceTree = (groups = []) => {
+export const primeCategoryMapFromServiceTree = (groups = [], { fresh = true } = {}) => {
   const taxonomy = buildCategoryMapFromGroups(groups);
   if (hasCategoryMapData(taxonomy)) {
+    if (!fresh) {
+      taxonomy.fetchedAt = categoryMapCache.fetchedAt || 0;
+      for (const key of Object.keys(taxonomy).filter((name) => name !== 'fetchedAt')) {
+        if (key === 'subcategoryChildren') {
+          const parents = new Set([...Object.keys(taxonomy[key]), ...Object.keys(categoryMapCache[key] || {})]);
+          taxonomy[key] = Object.fromEntries([...parents].map((parent) => [parent, Array.from(new Set([
+            ...(taxonomy[key][parent] || []), ...(categoryMapCache[key]?.[parent] || []),
+          ]))]));
+        } else taxonomy[key] = { ...taxonomy[key], ...categoryMapCache[key] };
+      }
+    }
     applyCategoryMap(taxonomy);
-    saveCategoryMap(taxonomy);
+    if (fresh) saveCategoryMap(taxonomy);
   }
   return categoryMapCache;
 };
@@ -403,22 +421,15 @@ export const createEmptySectionState = () =>
 const sanitizeCachedSections = (sections = {}) =>
   HOME_SECTION_ORDER.reduce((acc, key) => {
     const list = Array.isArray(sections[key]) ? sections[key] : [];
-    const maxItems =
-      key === 'banners'
-        ? HOME_BANNER_LIMIT
-        : key === 'bannerGroups'
-          ? HOME_BANNER_GROUP_LIMIT
-          : key === 'freeAiVideos'
-            ? HOME_MEDIA_LIMIT
-            : HOME_SECTION_LIMIT;
-    acc[key] = list.slice(0, maxItems).map((item) => {
+    // Preview limits belong to the screen, never to the persisted full list.
+    acc[key] = list.map((item) => {
       const normalizedItem = {
         ...item,
         id: item?.id || item?._id || `${key}-cache-${String(Math.random()).slice(2, 8)}`,
       };
 
       if (key === 'bannerGroups') {
-        const fullData = Array.isArray(item?.data) ? item.data.slice(0, HOME_GROUP_ITEM_LIMIT) : [];
+        const fullData = Array.isArray(item?.data) ? item.data : [];
         return {
           ...normalizedItem,
           data: fullData,
@@ -447,22 +458,57 @@ const buildCachePayload = (sections = {}) => ({
   savedAt: Date.now(),
 });
 
+const mergeCachedItems = (previous = [], incoming = []) => [...new Map(
+  [...previous, ...incoming].map((item) => [item?.id || item?._id || item?.fileUrl || item?.url || item, item]),
+).values()];
+const mergePartialSections = (previous = {}, incoming = {}) => Object.fromEntries(
+  HOME_SECTION_ORDER.map((key) => {
+    if (key !== 'bannerGroups') return [key, mergeCachedItems(previous[key], incoming[key])];
+    const oldGroups = new Map((previous[key] || []).map((group) => [group.id || group.title, group]));
+    const groups = mergeCachedItems(previous[key], incoming[key]).map((group) => {
+      const old = oldGroups.get(group.id || group.title);
+      const data = mergeCachedItems(old?.data, group.data);
+      return { ...group, data, previewData: data.slice(0, HOME_SECTION_LIMIT), count: data.length };
+    });
+    return [key, groups];
+  }),
+);
+
+const rememberCachedMaterials = (items) => {
+  const seen = new Set();
+  items.forEach((item) => {
+    const record = item?.raw || item;
+    const id = String(record?._id || record?.id || '');
+    if (!id || id.startsWith('seed-') || seen.has(id)) return;
+    seen.add(id);
+    if (recentMaterialRecords.get(id) !== record) {
+      recentMaterialRecords.set(id, record);
+      materialRecordsRevision += 1;
+    }
+  });
+};
+
 const loadCachedHomeSections = async (role = '', options = {}) => {
   try {
     const cacheKey = getHomeCacheKey(role, options.scope || {});
     const memorySections = homeSectionsMemoryCache.get(cacheKey);
     if (memorySections) return memorySections;
 
-    const raw = await Storage.getItem(cacheKey);
-    if (!raw) return null;
-    const payload = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    if (payload?.schemaVersion < HOME_CACHE_SCHEMA || payload?.source !== 'backend') return null;
+    const payload = await readContentCache(cacheKey);
+    if (!payload) return null;
+    if (payload?.schemaVersion < 19 || payload?.source !== 'backend') return null;
     if (!options.allowStale && !isCacheFresh(payload?.savedAt)) return null;
 
-    const sections = sanitizeCachedSections(payload?.sections || {});
-    const hasData = Object.values(sections).some((items) => Array.isArray(items) && items.length > 0);
+    let sections = sanitizeCachedSections(payload?.sections || {});
+    if (payload.schemaVersion < HOME_CACHE_SCHEMA) {
+      const bundled = loadBundledHomeSections(role, options.scope || {}, await loadImmediateTaxonomy());
+      if (bundled) sections = mergePartialSections(bundled, sections);
+      await saveCachedHomeSections(sections, role, options.scope || {});
+    }
+    const hasData = sectionsHaveContent(sections);
     if (hasData) {
       homeSectionsMemoryCache.set(cacheKey, sections);
+      rememberCachedMaterials(flattenHomeSectionItems(sections));
       return sections;
     }
     return null;
@@ -476,13 +522,29 @@ const saveCachedHomeSections = async (sections = {}, role = '', scope = {}) => {
     const cacheKey = getHomeCacheKey(role, scope);
     const sanitizedSections = sanitizeCachedSections(sections);
     homeSectionsMemoryCache.set(cacheKey, sanitizedSections);
-    await Storage.setItem(cacheKey, JSON.stringify(buildCachePayload(sanitizedSections)));
+    const payload = buildCachePayload(sanitizedSections);
+    const write = (homeCacheWrites.get(cacheKey) || Promise.resolve())
+      .catch(() => {})
+      .then(() => writeContentCache(cacheKey, payload));
+    homeCacheWrites.set(cacheKey, write);
+    await write;
+    if (homeCacheWrites.get(cacheKey) === write) homeCacheWrites.delete(cacheKey);
   } catch (_) {}
+};
+
+// Scope selection must not wait for the entire remote service tree.
+const loadImmediateTaxonomy = async () => {
+  if (hasCategoryMapData(categoryMapCache)) return categoryMapCache;
+  const saved = await loadCachedCategoryMap({ allowStale: true });
+  const fallback = buildCategoryMapFromGroups(getDefaultMaterialServiceTree());
+  fallback.fetchedAt = 0;
+  return applyCategoryMap(saved || fallback);
 };
 
 export const loadAnyCachedHomeContent = async (options = {}) => {
   const role = normalizeProfileRole(options.profileRole) || getUserProfileRole(options.user || {});
-  const sections = await loadCachedHomeSections(role, { allowStale: true });
+  const sections = await loadCachedHomeSections(role, { allowStale: true })
+    || loadBundledHomeSections(role, {}, await loadImmediateTaxonomy());
   if (!sections) return null;
   return {
     categories: [],
@@ -499,7 +561,9 @@ export const loadCachedScopedHomeContent = async (options = {}) => {
     subcategoryId: cleanText(options.subcategoryId),
   };
   if (!scope.categoryId && !scope.subcategoryId) return null;
-  const sections = await loadCachedHomeSections(role, { allowStale: true, scope });
+  const sections = await loadCachedHomeSections(role, { allowStale: true, scope })
+    || loadBundledHomeSections(role, scope, await loadImmediateTaxonomy())
+    || await loadReusableCachedSections(role, scope, await loadImmediateTaxonomy());
   if (!sections) return null;
   return {
     categories: [],
@@ -517,16 +581,33 @@ export const findByName = (items, names = []) => {
   });
 };
 
-export const unwrapList = (payload) => {
+const findApiList = (payload) => {
   if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.data)) return payload.data;
-  if (Array.isArray(payload?.data?.data)) return payload.data.data;
-  if (Array.isArray(payload?.items)) return payload.items;
-  if (Array.isArray(payload?.materials)) return payload.materials;
-  return [];
+  if (!payload || typeof payload !== 'object') return null;
+  for (const key of ['data', 'items', 'materials', 'categories', 'subcategories', 'results', 'result', 'payload']) {
+    const list = findApiList(payload[key]);
+    if (list) return list;
+  }
+  return null;
 };
+export const unwrapList = (payload) => findApiList(payload) || [];
+const readMaterialList = (payload) => {
+  const list = findApiList(payload);
+  if (!list) throw new Error('The content server returned an invalid response. Please retry in a moment.');
+  return list;
+};
+const readMaterialTotal = (payload, fallback) => Number(
+  payload?.total ?? payload?.pagination?.total ?? payload?.data?.total
+    ?? payload?.data?.pagination?.total ?? payload?.count ?? fallback,
+);
 
-export const normalizeMaterial = (item, index = 0, section = '', taxonomy = categoryMapCache) => {
+export const normalizeMaterial = (item, index = 0, section = '', taxonomy = categoryMapCache, { indexRecord = true } = {}) => {
+  const record = item.raw || item;
+  const recordId = record._id || record.id;
+  if (indexRecord && recordId && recentMaterialRecords.get(String(recordId)) !== record) {
+    recentMaterialRecords.set(String(recordId), record);
+    materialRecordsRevision += 1;
+  }
   const category = typeof item.categoryId === 'object' ? item.categoryId : null;
   const subcategory = typeof item.subcategoryId === 'object' ? item.subcategoryId : null;
   const categoryId = readIdValue(category?._id || item.categoryId);
@@ -675,7 +756,7 @@ const normalizeSeedItem = (item, sectionKey, index = 0, title = '') => {
     _id: item._id || item.id || `seed-${sectionKey}-${index}`,
   };
 
-  return normalizeMaterial(raw, index, title || sectionKey);
+  return normalizeMaterial(raw, index, title || sectionKey, categoryMapCache, { indexRecord: false });
 };
 
 const buildSeedCatalogSections = () => {
@@ -746,7 +827,8 @@ export const normalizeMaterials = (payload, section) =>
 
 export const normalizeMaterialsForUser = async (payload, section, user = {}) => {
   const role = getUserProfileRole(user);
-  const taxonomy = role ? await extractCategoryMaps().catch(() => categoryMapCache) : categoryMapCache;
+  const taxonomy = await loadImmediateTaxonomy();
+  if (role) extractCategoryMaps().catch(() => {});
   return filterMaterialsForRole(unwrapList(payload), role, taxonomy)
     .map((item, index) => normalizeMaterial(item, index, section, taxonomy));
 };
@@ -754,7 +836,8 @@ export const normalizeMaterialsForUser = async (payload, section, user = {}) => 
 const matchesSectionKeyword = (text, matches = []) =>
   matches.some((key) => text.includes(key));
 
-const extractCategoryMaps = async (options = {}) => {
+let categoryMapRequest = null;
+const fetchCategoryMaps = async (options = {}) => {
   const now = Date.now();
   const forceFresh = !!options.forceFresh;
   if (!forceFresh && categoryMapCache.fetchedAt && now - categoryMapCache.fetchedAt < CATEGORY_MAP_CACHE_TTL_MS) {
@@ -766,7 +849,7 @@ const extractCategoryMaps = async (options = {}) => {
     return applyCategoryMap(cachedTaxonomy);
   }
 
-  const staleTaxonomy = forceFresh ? null : await loadCachedCategoryMap({ allowStale: true });
+  const staleTaxonomy = await loadCachedCategoryMap({ allowStale: true });
   if (staleTaxonomy) {
     applyCategoryMap(staleTaxonomy);
   }
@@ -777,6 +860,8 @@ const extractCategoryMaps = async (options = {}) => {
     cache: !forceFresh,
     ...(forceFresh ? { params: freshParams() } : {}),
   };
+  const bulkSubcategories = getAllMaterialSubcategories(taxonomyRequestOptions)
+    .then((response) => unwrapList(response.data)).catch(() => null);
   const categories = await getMaterialCategories(taxonomyRequestOptions)
     .then((response) => unwrapList(response.data))
     .catch(() => []);
@@ -800,8 +885,12 @@ const extractCategoryMaps = async (options = {}) => {
   const subcategoryChildren = {};
   const subcategoryCategories = {};
   const subcategoryOrder = {};
+  const failedCategoryIds = new Set();
+  const allSubcategories = await bulkSubcategories;
   const subcategoryQueries = categoryIds.map((id) =>
-    getMaterialSubcategories(id, taxonomyRequestOptions)
+    (allSubcategories?.length
+      ? Promise.resolve({ data: allSubcategories.filter((item) => readIdValue(item.categoryId || item.category) === id) })
+      : getMaterialSubcategories(id, taxonomyRequestOptions))
       .then((response) => {
         const items = unwrapList(response.data);
         items.forEach((subcategory, index) => {
@@ -821,10 +910,23 @@ const extractCategoryMaps = async (options = {}) => {
           }
         });
       })
-      .catch(() => {}),
+      .catch(() => { failedCategoryIds.add(id); }),
   );
 
   await Promise.allSettled(subcategoryQueries);
+  // A failed category request is not evidence that its subcategories were deleted.
+  for (const [subId, categoryId] of Object.entries(categoryMapCache.subcategoryCategories || {})) {
+    if (!failedCategoryIds.has(categoryId)) continue;
+    subcategoryNames[subId] = categoryMapCache.subcategoryNames[subId];
+    subcategoryParents[subId] = categoryMapCache.subcategoryParents[subId];
+    subcategoryCategories[subId] = categoryId;
+    subcategoryOrder[subId] = categoryMapCache.subcategoryOrder[subId];
+    const parent = subcategoryParents[subId];
+    if (parent) {
+      if (!subcategoryChildren[parent]) subcategoryChildren[parent] = [];
+      subcategoryChildren[parent].push(subId);
+    }
+  }
   const nextTaxonomy = {
     fetchedAt: now,
     categories: categoryNames,
@@ -836,9 +938,17 @@ const extractCategoryMaps = async (options = {}) => {
     subcategoryCategories,
     subcategoryOrder,
   };
-  categoryMapCache = hasCategoryMapData(nextTaxonomy) ? nextTaxonomy : categoryMapCache;
+  if (hasCategoryMapData(nextTaxonomy)) applyCategoryMap(nextTaxonomy);
   saveCategoryMap(categoryMapCache);
   return categoryMapCache;
+};
+
+const extractCategoryMaps = async (options = {}) => {
+  if (categoryMapRequest) return categoryMapRequest;
+  const request = fetchCategoryMaps(options);
+  categoryMapRequest = request;
+  try { return await request; }
+  finally { if (categoryMapRequest === request) categoryMapRequest = null; }
 };
 
 const getObjectName = (value) => {
@@ -908,7 +1018,7 @@ const getRoleCategoryId = (role = '', taxonomy = categoryMapCache) => {
   return includesMatch ? includesMatch[0] : '';
 };
 
-const buildMaterialSearchText = (item = {}, taxonomy = categoryMapCache) => {
+const buildMaterialSearchText = (item = {}, taxonomy = categoryMapCache, normalize = normalizeText) => {
   const raw = item.raw && item.raw !== item ? item.raw : {};
   const category = typeof item.categoryId === 'object' ? item.categoryId : raw.categoryId;
   const subcategory = typeof item.subcategoryId === 'object' ? item.subcategoryId : raw.subcategoryId;
@@ -920,7 +1030,7 @@ const buildMaterialSearchText = (item = {}, taxonomy = categoryMapCache) => {
     ...(Array.isArray(raw.tags) ? raw.tags : []),
   ];
 
-  return normalizeText(
+  return normalize(
     [
       item.title,
       item.name,
@@ -1025,6 +1135,81 @@ const filterMaterialsForRole = (items = [], role = '', taxonomy = categoryMapCac
   const normalizedRole = normalizeProfileRole(role);
   if (!normalizedRole) return items;
   return items.filter((item) => isMaterialAllowedForRole(item, normalizedRole, taxonomy));
+};
+
+const searchableRecords = () => {
+  const snapshot = require('../data/materialCatalogSnapshot.json');
+  return [...new Map([
+    ...(snapshot.materials || []), ...recentMaterialRecords.values(),
+  ].map((item) => [String(item._id || item.id || item.fileUrl), item])).values()];
+};
+
+// Preserve Hindi and other scripts; taxonomy classifiers still use their
+// existing English keyword normalization independently of the Search screen.
+const normalizeSearchText = (value = '') => String(value || '').toLowerCase()
+  .replace(/[\u0000-\u002f\u003a-\u0040\u005b-\u0060\u007b-\u007f\u2000-\u206f]+/g, ' ').trim();
+const materialSearchPlan = (query, taxonomy, role = '') => {
+  const normalized = normalizeSearchText(query);
+  const roots = normalized ? Object.entries(taxonomy.subcategoryNames || {}).filter(([id, name]) => {
+    if (!isMaterialAllowedForRole({ categoryId: taxonomy.subcategoryCategories?.[id] }, role, taxonomy)) return false;
+    const canonical = normalizeSearchText(String(name).replace(/\s*\(\s*done\b[^)]*\)/gi, ''));
+    // Broad single-word queries such as Festival must still find Diwali/Holi
+    // records outside a generic Festival folder. Insurance aliases are precise.
+    return (normalized.includes(' ') && canonical === normalized) || canonical === `${normalized} insurance`;
+  }).map(([id]) => id) : [];
+  return {
+    terms: normalized.split(/\s+/).filter(Boolean),
+    scope: new Set(roots.flatMap((id) => getOrderedDescendantSubcategoryIds(id, taxonomy))),
+  };
+};
+const matchesMaterialSearch = (item, text, plan) => plan.scope.size
+  ? getMaterialSubcategoryIds(item).some((id) => plan.scope.has(id))
+  : plan.terms.every((term) => text.includes(term));
+
+export const loadCachedMaterialMatches = async (query, options = {}) => {
+  const taxonomy = await loadImmediateTaxonomy();
+  const role = normalizeProfileRole(options.profileRole) || getUserProfileRole(options.user || {});
+  const signature = `${role}:${taxonomy.fetchedAt}:${Object.keys(taxonomy.subcategoryNames || {}).length}:${materialRecordsRevision}`;
+  if (materialSearchIndex?.signature !== signature) {
+    materialSearchIndex = {
+      signature,
+      records: filterMaterialsForRole(searchableRecords(), role, taxonomy)
+        .filter((item) => item.isActive !== false)
+        .map((item) => {
+          const subcategoryId = readIdValue(item.subcategoryId);
+          const lineage = getSubcategoryHierarchyMeta(subcategoryId, taxonomy).subcategoryLineageIds || [];
+          return { item, text: normalizeSearchText(`${buildMaterialSearchText(item, taxonomy, normalizeSearchText)} ${lineage.map((id) => getTaxonomyName(taxonomy, 'subcategory', id)).join(' ')}`) };
+        }),
+    };
+  }
+  const plan = materialSearchPlan(query, taxonomy, role);
+  const records = materialSearchIndex.records.filter(({ item, text }) =>
+    (!options.predicate || options.predicate(item, text)) && matchesMaterialSearch(item, text, plan));
+  const matches = records.slice(0, options.limit ?? records.length)
+    .map(({ item }, index) => normalizeMaterial(item, index, options.section || 'Materials', taxonomy));
+  // Normalizing these same indexed records also registers them for Home reuse.
+  materialSearchIndex.signature = `${role}:${taxonomy.fetchedAt}:${Object.keys(taxonomy.subcategoryNames || {}).length}:${materialRecordsRevision}`;
+  return matches;
+};
+
+export const searchMaterialContent = async (query, options = {}) => {
+  const cached = await loadCachedMaterialMatches(query, options);
+  options.onCached?.(cached);
+  try {
+    // Search the live tag index once; do not scan an arbitrary first page after it.
+    const response = await getMaterials(options.params || { tag: query, page: 1, limit: 100 }, { token: null, timeout: 9000 });
+    const fresh = await normalizeMaterialsForUser(response.data, options.section || 'Materials', options.user || {});
+    const role = normalizeProfileRole(options.profileRole) || getUserProfileRole(options.user || {});
+    const plan = materialSearchPlan(query, categoryMapCache, role);
+    const matching = filterMaterialsForRole(fresh, role, categoryMapCache).filter((item) => {
+      const text = buildMaterialSearchText(item, categoryMapCache, normalizeSearchText);
+      return (!options.predicate || options.predicate(item.raw || item, text)) && matchesMaterialSearch(item, text, plan);
+    });
+    return [...new Map([...cached, ...matching].map((item) => [item.id, item])).values()];
+  } catch (error) {
+    if (cached.length) return cached;
+    throw error;
+  }
 };
 
 const hasExplicitVideoSignal = (item = {}) => {
@@ -1410,7 +1595,7 @@ const fetchAllMaterials = async ({ fetchAll = false, minBannerItems = HOME_BANNE
   ]);
   const payload = firstPage.data;
   const firstList = [
-    ...unwrapList(payload),
+    ...readMaterialList(payload),
     ...unwrapList(reelPage?.data),
   ];
   const seen = new Set();
@@ -1421,7 +1606,7 @@ const fetchAllMaterials = async ({ fetchAll = false, minBannerItems = HOME_BANNE
     seen.add(key);
     return true;
   });
-  const total = Number(payload?.total || payload?.count || firstList.length || 0);
+  const total = readMaterialTotal(payload, firstList.length);
 
   if (total <= dedupedFirstList.length || !total) return dedupedFirstList;
 
@@ -1432,7 +1617,7 @@ const fetchAllMaterials = async ({ fetchAll = false, minBannerItems = HOME_BANNE
   const remaining = [];
   for (let page = 2; page <= maxPages; page += 1) {
     const response = await getMaterials({ page, limit: HOME_BATCH_LIMIT, ...requestParams }, requestOptions)
-      .then((res) => unwrapList(res.data))
+      .then((res) => readMaterialList(res.data))
       .catch(() => []);
     remaining.push(...response);
     if (remaining.length + dedupedFirstList.length >= total) break;
@@ -1451,18 +1636,24 @@ const fetchMaterialPagesForParams = async (params = {}, options = {}) => {
   const requestParams = forceFresh ? freshParams() : {};
   const firstResponse = await getMaterials({ ...params, page: 1, limit, ...requestParams }, requestOptions);
   const firstPayload = firstResponse.data;
-  const firstList = unwrapList(firstPayload);
-  const total = Number(firstPayload?.total || firstPayload?.count || firstList.length || 0);
+  const firstList = readMaterialList(firstPayload);
+  options.onPage?.(firstList);
+  const total = readMaterialTotal(firstPayload, firstList.length);
   const totalPages = total ? Math.ceil(total / limit) : 1;
   const pageLimit = Math.min(totalPages, maxPages);
+  if (pageLimit < totalPages) options.onIncomplete?.();
 
   if (pageLimit <= 1) return firstList;
 
   const rest = await Promise.all(
     Array.from({ length: pageLimit - 1 }, (_, index) => index + 2).map((page) =>
       getMaterials({ ...params, page, limit, ...requestParams }, requestOptions)
-        .then((response) => unwrapList(response.data))
-        .catch(() => []),
+        .then((response) => {
+          const items = readMaterialList(response.data);
+          options.onPage?.(items);
+          return items;
+        })
+        .catch((error) => { options.onError?.(error); return []; }),
     ),
   );
 
@@ -1513,7 +1704,7 @@ const buildSectionsFromMaterials = (items, fallbacks = {}, options = {}) => {
     if (isBannerMaterial(item, taxonomy)) {
       const groupSection = 'bannerGroups';
       const normalizedBanner = normalizeMaterial(item, sections.banners.length, 'banners', taxonomy);
-      const normalizedTemplate = normalizeMaterial(item, sections.bannerGroups.length, groupSection, taxonomy);
+      const normalizedTemplate = { ...normalizedBanner, section: groupSection };
       const bannerImage =
         normalizedBanner.image ||
         normalizedBanner.thumbnail ||
@@ -1537,6 +1728,10 @@ const buildSectionsFromMaterials = (items, fallbacks = {}, options = {}) => {
       }
 
       addBannerToGroups(sections.bannerGroups, bannerGroupIndex, item, normalizedTemplate, taxonomy, groupingScope);
+      const thematicSection = buildSectionByHeuristics(item, taxonomy);
+      if (thematicSection && sections[thematicSection]) {
+        sections[thematicSection].push({ ...normalizedBanner, section: thematicSection });
+      }
       continue;
     }
 
@@ -1550,7 +1745,7 @@ const buildSectionsFromMaterials = (items, fallbacks = {}, options = {}) => {
     sections[section].push(normalizedItem);
 
     if (groupAllBySubcategory) {
-      const groupedItem = normalizeMaterial(item, sections.bannerGroups.length, 'bannerGroups', taxonomy);
+      const groupedItem = { ...normalizedItem, section: 'bannerGroups' };
       addBannerToGroups(sections.bannerGroups, bannerGroupIndex, item, groupedItem, taxonomy, groupingScope);
     }
   }
@@ -1565,7 +1760,7 @@ const buildSectionsFromMaterials = (items, fallbacks = {}, options = {}) => {
       key === 'banners'
         ? bannerLimit
         : key === 'bannerGroups'
-          ? HOME_BANNER_GROUP_LIMIT
+          ? (groupAllBySubcategory ? sectionItems.length : HOME_BANNER_GROUP_LIMIT)
           : key === 'freeAiVideos'
             ? mediaLimit
             : limit;
@@ -1625,6 +1820,64 @@ const flattenHomeSectionItems = (sections = {}) =>
     })
     .filter(Boolean);
 
+// Home and Menu are two views of the same real materials. Reuse their saved
+// records only after filtering by role and the selected taxonomy scope.
+const loadReusableCachedSections = async (role, scope, taxonomy) => {
+  if (!Storage.getAllKeys) return null;
+  const categoryId = cleanText(scope.categoryId);
+  const subcategoryIds = scope.subcategoryId
+    ? getOrderedDescendantSubcategoryIds(scope.subcategoryId, taxonomy) : [];
+  const keys = await Storage.getAllKeys().catch(() => []);
+  const candidates = keys.filter((key) => {
+    if (key.includes(':chunk:')) return false;
+    if (key === getHomeCacheKey(role)) return true;
+    if (categoryId && key.startsWith(`${getHomeCacheKey(role)}_scope_${categoryId}_`)) return true;
+    if (!key.startsWith('@policybhandar_menu_content_v1:')) return false;
+    try {
+      const [savedRole, , savedCategory] = JSON.parse(key.slice(key.indexOf(':') + 1));
+      return savedRole === role && (!categoryId || savedCategory === categoryId);
+    } catch (_) { return false; }
+  });
+  const records = await runInBatches(candidates, 4, async (key) => {
+    try {
+      const saved = await readContentCache(key);
+      if (saved?.sections && (saved.source !== 'backend' || saved.schemaVersion < 19)) return [];
+      return (saved?.sections ? flattenHomeSectionItems(saved.sections) : saved?.data || [])
+        .map((item) => item.raw || item);
+    } catch (_) { return []; }
+  });
+  const items = filterMaterialsForRole(filterMaterialsForTaxonomyScope(
+    flattenFetchedResponses(records), { categoryId, subcategoryIds }, taxonomy,
+  ), role, taxonomy);
+  const unique = [...new Map(items.map((item) => [item._id || item.id || item.fileUrl, item])).values()];
+  const sections = buildSectionsFromMaterials(unique, {}, {
+    includeFallbacks: false, taxonomy, groupAllBySubcategory: true,
+    expectedGroupParentId: scope.subcategoryId, expectedGroupCategoryId: categoryId,
+  });
+  if (!sectionsHaveContent(sections)) return null;
+  await saveCachedHomeSections(sections, role, scope);
+  return sections;
+};
+
+const loadBundledHomeSections = (role, scope, taxonomy) => {
+  // This is a dated snapshot of real public backend records, not sample templates.
+  // It gives a new installation content while the live service refreshes it.
+  const snapshot = require('../data/materialCatalogSnapshot.json');
+  const records = recentMaterialRecords.size ? searchableRecords() : snapshot.materials || [];
+  const materials = filterMaterialsForRole(filterMaterialsForTaxonomyScope(records, {
+    categoryId: scope.categoryId,
+    subcategoryIds: scope.subcategoryId ? getOrderedDescendantSubcategoryIds(scope.subcategoryId, taxonomy) : [],
+  }, taxonomy), role, taxonomy);
+  const sections = buildSectionsFromMaterials(materials, {}, {
+    taxonomy, includeFallbacks: false, groupAllBySubcategory: true,
+    expectedGroupParentId: scope.subcategoryId, expectedGroupCategoryId: scope.categoryId,
+    sectionLimit: Math.max(materials.length, 240), mediaLimit: Math.max(materials.length, HOME_MEDIA_LIMIT), groupItemLimit: Math.max(materials.length, 2000),
+  });
+  if (!sectionsHaveContent(sections)) return null;
+  saveCachedHomeSections(sections, role, scope);
+  return sections;
+};
+
 const loadMaterialsForTaxonomy = async ({
   categoryId = '',
   subcategoryId = '',
@@ -1638,6 +1891,9 @@ const loadMaterialsForTaxonomy = async ({
   maxDirectQueries = HOME_SCOPED_MAX_DIRECT_QUERIES,
   forceFreshTaxonomy = false,
   forceFreshMaterials = false,
+  onPartial,
+  onComplete,
+  taxonomyOverride,
 } = {}) => {
   const subcategoryIdList = Array.from(new Set([
     ...subcategoryIds,
@@ -1654,45 +1910,87 @@ const loadMaterialsForTaxonomy = async ({
   };
 
   try {
-    const taxonomy = await extractCategoryMaps({ forceFresh: forceFreshTaxonomy }).catch(() => categoryMapCache);
+    const taxonomy = taxonomyOverride || await loadImmediateTaxonomy();
+    if (!taxonomyOverride) extractCategoryMaps({ forceFresh: forceFreshTaxonomy }).catch(() => {});
+    const received = new Map();
+    const failures = [];
+    let complete = true;
+    const scopeFilter = () => ({
+      categoryId,
+      subcategoryIds: subcategoryId ? getOrderedDescendantSubcategoryIds(subcategoryId, taxonomy) : [],
+    });
+    const rememberScopedDescendants = (items, query) => {
+      if (!query.subcategoryId) return;
+      for (const item of items) {
+        if (categoryId && !getMaterialCategoryIds(item).includes(categoryId)) continue;
+        for (const id of getMaterialSubcategoryIds(item)) {
+          if (id === query.subcategoryId || taxonomy.subcategoryCategories[id]) continue;
+          // The recursive subcategory endpoint is authoritative about membership.
+          // New descendants must not be discarded just because the bundled menu is older.
+          taxonomy.subcategoryCategories[id] = categoryId;
+          taxonomy.subcategoryParents[id] = query.subcategoryId;
+          taxonomy.subcategoryNames[id] = getObjectName(item.subcategoryId) || item.subcategoryName || '';
+          taxonomy.subcategoryChildren[query.subcategoryId] = Array.from(new Set([
+            ...(taxonomy.subcategoryChildren[query.subcategoryId] || []), id,
+          ]));
+        }
+      }
+    };
+    const publish = (items) => {
+      flattenFetchedResponses([items]).forEach((item) => received.set(String(item?._id || item?.id || item?.fileUrl || Math.random()), item));
+      const scoped = filterMaterialsForTaxonomyScope([...received.values()], scopeFilter(), taxonomy);
+      const partial = filterMaterialsForRole(scoped, role, taxonomy);
+      if (partial.length) onPartial?.(partial);
+      return items;
+    };
     const materialQueryIds = querySubcategoryIdList.length ? querySubcategoryIdList : subcategoryIdList;
-    const directQueryIds = materialQueryIds.slice(0, maxDirectQueries);
+    const directQueryIds = materialQueryIds.filter((id) => id !== subcategoryId).slice(0, maxDirectQueries);
+    const firstChildId = directQueryIds[0];
     const shouldFetchCategoryWide = !!categoryId && materialQueryIds.length > maxDirectQueries;
+    let successfulQueries = 0;
+    const fetchScope = (query, pageLimit = limit) => fetchMaterialPagesForParams(query, {
+      timeout: 12000, limit: pageLimit, maxPages, forceFresh: forceFreshMaterials,
+      onPage: (items) => { rememberScopedDescendants(items, query); publish(items); },
+      onError: (error) => failures.push(error),
+      onIncomplete: () => { complete = false; },
+    }).then((items) => { successfulQueries += 1; return items; })
+      .catch((error) => { failures.push(error); return []; });
     const parentScopedResponse = subcategoryId
-      ? fetchMaterialPagesForParams({ ...params, subcategoryId }, { timeout: 6500, limit: Math.max(limit, 180), maxPages: Math.max(maxPages, 3), forceFresh: forceFreshMaterials })
-        .catch(() => [])
+      ? fetchScope({ ...params, subcategoryId })
       : Promise.resolve([]);
-    const childScopedResponses = directQueryIds.length && !shouldFetchCategoryWide
-      ? runInBatches(
-        directQueryIds,
-        HOME_SCOPED_DIRECT_QUERY_CONCURRENCY,
-        (id) => fetchMaterialPagesForParams({ ...params, subcategoryId: id }, { timeout: 6500, limit, maxPages, forceFresh: forceFreshMaterials })
-          .catch(() => []),
-      )
-      : Promise.resolve([]);
-    const categoryWideResponse = categoryId
-      ? fetchMaterialPagesForParams(params, { timeout: 6500, limit: Math.max(limit, 220), maxPages: Math.max(maxPages, 3), forceFresh: forceFreshMaterials })
-        .catch(() => [])
+    const categoryWideResponse = firstChildId && subcategoryId
+      ? fetchScope({ ...params, subcategoryId: firstChildId })
+      : categoryId ? fetchScope(params)
       : Promise.resolve([]);
     const responses = await Promise.all([
       parentScopedResponse,
-      childScopedResponses,
       categoryWideResponse,
     ]);
+    // If the server cannot be reached, repeating the same failure for every
+    // child adds minutes of waiting without discovering any content.
+    if (!successfulQueries && failures.length) throw failures[0];
+    if (directQueryIds.length && !shouldFetchCategoryWide) {
+      const remainingIds = firstChildId && subcategoryId ? directQueryIds.slice(1) : directQueryIds;
+      for (let index = 0; index < remainingIds.length; index += HOME_SCOPED_DIRECT_QUERY_CONCURRENCY) {
+        const failuresBefore = failures.length;
+        const batch = remainingIds.slice(index, index + HOME_SCOPED_DIRECT_QUERY_CONCURRENCY);
+        responses.push(...await Promise.all(batch.map((id) => fetchScope({ ...params, subcategoryId: id }))));
+        if (failures.length - failuresBefore >= batch.length) break;
+      }
+    }
     const deduped = Array.from(
       new Map(
         flattenFetchedResponses(responses)
           .map((item) => [String(item?._id || item?.id || item?.fileUrl || Math.random()), item]),
       ).values(),
     );
-    const scopedList = filterMaterialsForTaxonomyScope(deduped, {
-      categoryId,
-      subcategoryIds: subcategoryIdList,
-    }, taxonomy);
+    const scopedList = filterMaterialsForTaxonomyScope(deduped, scopeFilter(), taxonomy);
     const list = filterMaterialsForRole(scopedList, role, taxonomy);
+    if (!list.length && failures.length) throw failures[0];
+    onComplete?.(complete && !failures.length && materialQueryIds.length <= maxDirectQueries);
     return list;
-  } catch (_) {
-    return [];
+  } catch (error) {
+    throw error;
   }
 };
 
@@ -1707,15 +2005,19 @@ export const loadHomeContent = async (fallbacks = {}, options = {}) => {
   const scopeCache = hasScopedSelection
     ? { categoryId: selectedCategoryId, subcategoryId: selectedSubcategoryId }
     : {};
-  const cachedSections = useCached
-    ? await loadCachedHomeSections(role, {
+  let cachedSections = await loadCachedHomeSections(role, {
       scope: scopeCache,
-      allowStale: hasScopedSelection && options.preferCacheFirst,
-    })
-    : null;
+      allowStale: true,
+    });
   const fallbackData = includeFallbacks ? { ...EMPTY_FALLBACKS, ...fallbacks } : { ...fallbacks };
+  const taxonomy = options.includeTaxonomy || hasScopedSelection || options.forceFreshTaxonomy
+    ? await loadImmediateTaxonomy() : categoryMapCache;
+  if (!cachedSections && hasScopedSelection) {
+    cachedSections = await loadReusableCachedSections(role, scopeCache, taxonomy);
+  }
+  if (!cachedSections) cachedSections = loadBundledHomeSections(role, scopeCache, taxonomy);
 
-  if (options.preferCacheFirst && cachedSections) {
+  if (useCached && options.preferCacheFirst && cachedSections) {
     return {
       categories: [],
       subcategories: { greetings: [], agent: [] },
@@ -1725,9 +2027,9 @@ export const loadHomeContent = async (fallbacks = {}, options = {}) => {
   }
 
   try {
-    const taxonomy = options.includeTaxonomy || options.forceFreshTaxonomy
-      ? await extractCategoryMaps({ forceFresh: !!options.forceFreshTaxonomy }).catch(() => categoryMapCache)
-      : categoryMapCache;
+    if (options.includeTaxonomy || options.forceFreshTaxonomy) {
+      extractCategoryMaps({ forceFresh: !!options.forceFreshTaxonomy }).catch(() => {});
+    }
     const selectedRootSubcategoryIds = selectedCategoryId && !selectedSubcategoryId
       ? getCategorySubcategoryIds(selectedCategoryId, taxonomy, { rootsOnly: true })
       : [];
@@ -1737,6 +2039,8 @@ export const loadHomeContent = async (fallbacks = {}, options = {}) => {
         ? selectedRootSubcategoryIds.flatMap((id) => getOrderedDescendantSubcategoryIds(id, taxonomy))
         : [];
     const roleCategoryId = !hasScopedSelection && fetchAll ? getRoleCategoryId(role, taxonomy) : '';
+    // The unscoped Home query is a latest-page refresh, not a complete catalog.
+    let scopeComplete = hasScopedSelection;
     const directScopedMaterials = hasScopedSelection
       ? await loadMaterialsForTaxonomy({
         categoryId: selectedCategoryId,
@@ -1751,6 +2055,20 @@ export const loadHomeContent = async (fallbacks = {}, options = {}) => {
       maxDirectQueries: options.maxDirectQueries || HOME_SCOPED_MAX_DIRECT_QUERIES,
       forceFreshTaxonomy: !!options.forceFreshTaxonomy,
       forceFreshMaterials: !!options.forceFreshMaterials,
+      taxonomyOverride: taxonomy,
+      onComplete: (complete) => { scopeComplete = complete; },
+      onPartial: (items) => {
+        const partialSections = buildSectionsFromMaterials(items, fallbackData, {
+          includeFallbacks, taxonomy, sectionLimit: 240, groupItemLimit: 2000,
+          groupAllBySubcategory: true, expectedGroupParentId: selectedSubcategoryId,
+          expectedGroupCategoryId: selectedCategoryId,
+        });
+        if (sectionsHaveContent(partialSections)) {
+          cachedSections = mergePartialSections(cachedSections || {}, partialSections);
+          saveCachedHomeSections(cachedSections, role, scopeCache);
+          options.onPartial?.({ sections: cachedSections, source: 'backend' });
+        }
+      },
     })
       : [];
     const materials = hasScopedSelection
@@ -1761,14 +2079,9 @@ export const loadHomeContent = async (fallbacks = {}, options = {}) => {
           { timeout: 9000, limit: HOME_ROLE_PAGE_LIMIT, maxPages: fetchAll ? 8 : 4 },
         )
         : await fetchAllMaterials({ fetchAll, forceFresh: !!options.forceFreshMaterials });
-    const scopedMaterials = hasScopedSelection
-      ? filterMaterialsForTaxonomyScope(materials, {
-        categoryId: selectedCategoryId,
-        subcategoryIds: selectedSubcategoryIds,
-      }, taxonomy)
-      : materials;
+    const scopedMaterials = materials;
     const filteredMaterials = filterMaterialsForRole(scopedMaterials, role, taxonomy);
-    const sections = buildSectionsFromMaterials(filteredMaterials, fallbackData, {
+    const fetchedSections = buildSectionsFromMaterials(filteredMaterials, fallbackData, {
       includeFallbacks,
       taxonomy,
       sectionLimit: hasScopedSelection || roleCategoryId ? 240 : undefined,
@@ -1779,8 +2092,10 @@ export const loadHomeContent = async (fallbacks = {}, options = {}) => {
       expectedGroupParentId: selectedSubcategoryId,
       expectedGroupCategoryId: selectedCategoryId || roleCategoryId,
     });
+    const sections = !scopeComplete && cachedSections
+      ? mergePartialSections(cachedSections, fetchedSections) : fetchedSections;
 
-    if (Object.values(sections).some((items) => items.length > 0)) {
+    if (sectionsHaveContent(sections)) {
       await saveCachedHomeSections(sections, role, scopeCache);
       return {
         categories: taxonomy ? Object.values(taxonomy.categories) : [],
@@ -1799,7 +2114,10 @@ export const loadHomeContent = async (fallbacks = {}, options = {}) => {
       };
     }
 
-    throw new Error('No content available from backend response.');
+    return {
+      categories: Object.values(taxonomy.categories || {}),
+      subcategories: { greetings: [], agent: [] }, sections, source: 'empty',
+    };
   } catch (_) {}
 
   if (cachedSections) {
@@ -1815,12 +2133,15 @@ export const loadHomeContent = async (fallbacks = {}, options = {}) => {
     categories: [],
     subcategories: { greetings: [], agent: [] },
     sections: buildSectionsFromMaterials([], fallbackData, { includeFallbacks }),
-    source: includeFallbacks ? 'fallback' : 'empty',
+    source: includeFallbacks ? 'fallback' : 'unavailable',
   };
 };
 
 export const invalidateHomeContentCache = async () => {
   homeSectionsMemoryCache.clear();
+  recentMaterialRecords.clear();
+  materialSearchIndex = null;
+  materialRecordsRevision += 1;
   categoryMapCache = {
     fetchedAt: 0,
     categories: {},
@@ -2012,12 +2333,32 @@ export const seedTemplatesToBackend = async (seedOptions = {}) => {
     }
   };
 
-export const loadMenuSection = async (sectionId, title, fallbacks = {}, options = {}) => {
+const menuItemsFromSections = (sectionId, sections, role) => {
+  const sectionMap = {
+    motivation: sections.dailyMotivation,
+    greetings: [...(sections.birthday || []), ...(sections.anniversary || []), ...(sections.festival || []), ...(sections.specialDays || [])],
+    concepts: sections.concepts,
+    knowledge: sections.knowledge,
+    news: sections.news,
+    licplans: sections.licplans,
+    audiovideo: sections.freeAiVideos,
+    leaders: role === 'leader' ? sections.recentUpdates : [],
+    mixplan: sections.concepts,
+    mycontent: sections.recentUpdates,
+    marketing: sections.recentUpdates,
+    digitalcard: sections.digitalCards,
+    prospect: [],
+  };
+  return [...new Map((sectionMap[sectionId] || sections.recentUpdates || []).map((item) => [item.id, item])).values()];
+};
+
+const loadMenuSectionFromBackend = async (sectionId, title, fallbacks = {}, options = {}) => {
   const role = normalizeProfileRole(options.profileRole) || getUserProfileRole(options.user || {});
   const selectedCategoryId = cleanText(options.categoryId);
   const selectedSubcategoryId = cleanText(options.subcategoryId);
   const selectedTitle = options.serviceSubcategoryName || options.serviceCategoryName || title;
-  const taxonomy = await extractCategoryMaps({ forceFresh: !!options.forceFreshTaxonomy }).catch(() => categoryMapCache);
+  const taxonomy = await loadImmediateTaxonomy();
+  extractCategoryMaps({ forceFresh: !!options.forceFreshTaxonomy }).catch(() => {});
   const selectedRootSubcategoryIds = selectedCategoryId && !selectedSubcategoryId
     ? getCategorySubcategoryIds(selectedCategoryId, taxonomy, { rootsOnly: true })
     : [];
@@ -2028,6 +2369,7 @@ export const loadMenuSection = async (sectionId, title, fallbacks = {}, options 
       : [];
 
   if (selectedCategoryId || selectedSubcategoryId) {
+    let complete = true;
     const directData = await loadMaterialsForTaxonomy({
       categoryId: selectedCategoryId,
       subcategoryId: selectedSubcategoryId,
@@ -2036,13 +2378,11 @@ export const loadMenuSection = async (sectionId, title, fallbacks = {}, options 
       title: selectedTitle,
       role,
       user: options.user || {},
+      taxonomyOverride: taxonomy,
+      onComplete: (value) => { complete = value; },
+      onPartial: (data) => options.onPartial?.({ title: selectedTitle, data, source: 'backend' }),
     });
-    if (directData.length) {
-      return {
-        title: selectedTitle,
-        data: directData,
-      };
-    }
+    return { title: selectedTitle, data: directData, complete, source: directData.length ? 'backend' : 'empty' };
   }
 
   const home = await loadHomeContent(fallbacks, {
@@ -2072,29 +2412,54 @@ export const loadMenuSection = async (sectionId, title, fallbacks = {}, options 
     };
   }
 
-  const sectionMap = {
-    motivation: home.sections.dailyMotivation,
-    greetings: [
-      ...home.sections.birthday,
-      ...home.sections.anniversary,
-      ...home.sections.festival,
-      ...home.sections.specialDays,
-    ],
-    concepts: home.sections.concepts,
-    knowledge: home.sections.knowledge,
-    news: home.sections.news,
-    licplans: home.sections.licplans,
-    audiovideo: home.sections.freeAiVideos,
-    leaders: role === 'leader' ? home.sections.recentUpdates : [],
-    mixplan: home.sections.concepts,
-    mycontent: home.sections.recentUpdates,
-    marketing: home.sections.recentUpdates,
-    digitalcard: home.sections.digitalCards,
-    prospect: [],
-  };
-
   return {
     title,
-    data: sectionMap[sectionId] || home.sections.recentUpdates,
+    data: menuItemsFromSections(sectionId, home.sections, role),
+    source: home.source,
   };
+};
+
+export const loadMenuSection = async (sectionId, title, fallbacks = {}, options = {}) => {
+  const role = normalizeProfileRole(options.profileRole) || getUserProfileRole(options.user || {});
+  const key = `@policybhandar_menu_content_v1:${JSON.stringify([role, sectionId, options.categoryId || '', options.subcategoryId || ''])}`;
+  let cached = null;
+  try {
+    cached = await readContentCache(key);
+    if (cached?.data?.length) rememberCachedMaterials(cached.data);
+    if (cached?.data?.length) options.onCached?.({ ...cached, source: 'cache' });
+  } catch (_) {}
+  if (!cached?.data?.length) {
+    const scoped = options.categoryId || options.subcategoryId;
+    const savedHome = scoped
+      ? await loadCachedScopedHomeContent({ ...options, profileRole: role })
+      : await loadAnyCachedHomeContent({ ...options, profileRole: role });
+    if (savedHome) {
+      cached = { title, data: scoped ? [...new Map(flattenHomeSectionItems(savedHome.sections)
+        .map((item) => [item.id || item._id, item])).values()] : menuItemsFromSections(sectionId, savedHome.sections, role) };
+      if (cached.data.length) options.onCached?.({ ...cached, source: 'cache' });
+    }
+  }
+  try {
+    const result = await loadMenuSectionFromBackend(sectionId, title, fallbacks, {
+      ...options,
+      onPartial: (partial) => {
+        cached = { ...partial, data: mergeCachedItems(cached?.data, partial.data) };
+        const write = (homeCacheWrites.get(key) || Promise.resolve()).catch(() => {})
+          .then(() => writeContentCache(key, cached));
+        homeCacheWrites.set(key, write);
+        options.onPartial?.(cached);
+      },
+    });
+    if (result?.data?.length) {
+      if (result.complete === false) result.data = mergeCachedItems(cached?.data, result.data);
+      await homeCacheWrites.get(key)?.catch(() => {});
+      await writeContentCache(key, result);
+      homeCacheWrites.delete(key);
+      return result;
+    }
+    return cached?.data?.length ? { ...cached, source: 'cache' } : { title, data: [], source: result.source || 'unavailable' };
+  } catch (error) {
+    if (cached?.data?.length) return { ...cached, source: 'cache' };
+    throw error;
+  }
 };

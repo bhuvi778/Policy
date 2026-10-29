@@ -17,6 +17,9 @@ const RateUsScreen = ({ navigation }) => {
   const [feedback, setFeedback] = useState('');
   const [submitted, setSubmitted] = useState(false);
 
+  // The custom rating flow is Android-only, including when mounted outside the navigator.
+  if (Platform.OS !== 'android') return null;
+
   const handleSubmit = () => {
     if (rating === 0) {
       Alert.alert('Please Rate', 'Select a star rating before submitting.');

@@ -307,6 +307,7 @@ const PlanCard = ({ plan, selected, recommended, onPress }) => {
 const SubscriptionPlansScreen = ({ navigation, route }) => {
   const insets = useSafeAreaInsets();
   const { user, refreshProfile, logout } = useAuth();
+  const profileRole = getUserProfileRole(user || {});
   const fromRegistration = !!route?.params?.fromRegistration;
   const subscription = getSubscriptionInfo(user);
   const [plans, setPlans] = useState([]);
@@ -372,13 +373,13 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
 
   useEffect(() => {
     loadPlans(false);
-  }, [user]);
+  }, [profileRole]);
 
   useEffect(() => {
     if (checkoutVisible && !categoryOptions.length && !categoryLoading) {
       loadCategoryOptions();
     }
-  }, [categoryLoading, categoryOptions.length, checkoutVisible]);
+  }, [checkoutVisible]);
 
   useEffect(() => {
     const unsubscribe = navigation.addListener?.('focus', () => {

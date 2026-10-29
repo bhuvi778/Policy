@@ -20,6 +20,13 @@ class PolicyBhandarVideoContainerView: UIView {
     didSet { applyConfiguration() }
   }
 
+  @objc var paused: Bool = false {
+    didSet {
+      if paused || thumbnailMode { player?.pause() }
+      else { player?.play() }
+    }
+  }
+
   private var configuredSource: String?
   private var player: AVPlayer?
   private var playerLayer: AVPlayerLayer?
@@ -80,7 +87,7 @@ class PolicyBhandarVideoContainerView: UIView {
     guard let source = source, !source.isEmpty else { return }
 
     if source == configuredSource {
-      if thumbnailMode {
+      if thumbnailMode || paused {
         player?.pause()
       }
       return
@@ -136,7 +143,7 @@ class PolicyBhandarVideoContainerView: UIView {
     case .readyToPlay:
       activityIndicator.stopAnimating()
       onVideoReady?([:])
-      if thumbnailMode {
+      if thumbnailMode || paused {
         player.seek(to: CMTime(value: 1, timescale: 1000))
         player.pause()
       } else {

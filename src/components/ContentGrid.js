@@ -1,9 +1,8 @@
 import React, { useCallback, useState } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  Dimensions, Alert,
+  Dimensions, Alert, FlatList,
 } from 'react-native';
-import { ScrollView as GestureScrollView } from 'react-native-gesture-handler';
 import { Colors } from '../theme/colors';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
@@ -72,23 +71,21 @@ const ContentGrid = React.memo(({ title, data, onViewAll, onItemPress }) => {
         </TouchableOpacity>
       </View>
 
-      <GestureScrollView
+      <FlatList
+        data={data}
+        renderItem={({ item }) => <ContentCard item={item} onPress={handleCardPress} />}
+        keyExtractor={(item, index) => String(item.id || item._id || index)}
+        initialNumToRender={3}
+        maxToRenderPerBatch={3}
+        windowSize={3}
+        getItemLayout={(_, index) => ({ length: CARD_WIDTH + 10, offset: (CARD_WIDTH + 10) * index, index })}
+        ListEmptyComponent={<View style={styles.emptyRow}><MaterialIcons name="folder-open" size={20} color={Colors.textLight} /><Text style={styles.emptyText}>No content added in this folder yet.</Text></View>}
         horizontal
         nestedScrollEnabled
-        directionalLockEnabled
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
         style={styles.horizontalList}
-      >
-        {data.length ? data.map((item) => (
-          <ContentCard key={item.id} item={item} onPress={handleCardPress} />
-        )) : (
-          <View style={styles.emptyRow}>
-            <MaterialIcons name="folder-open" size={20} color={Colors.textLight} />
-            <Text style={styles.emptyText}>No content added in this folder yet.</Text>
-          </View>
-        )}
-      </GestureScrollView>
+      />
 
       <RecipientSheet
         visible={!!modalItem}

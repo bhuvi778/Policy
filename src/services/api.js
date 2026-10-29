@@ -1,9 +1,13 @@
 export const BASE_URL = 'https://api2.primeimpact.in';
 
 let currentToken = null;
+let authSessionVersion = 0;
+export const getAuthSessionVersion = () => authSessionVersion;
 const PUBLIC_GET_CACHE_TTL_MS = 2 * 60 * 1000;
 const publicGetCache = new Map();
 const publicGetInflight = new Map();
+const publicGetFailures = new Map();
+const PUBLIC_GET_FAILURE_COOLDOWN_MS = 15000;
 
 export class ApiError extends Error {
   constructor(message, response, data) {
@@ -15,6 +19,7 @@ export class ApiError extends Error {
 }
 
 export const setAuthToken = (token) => {
+  if (currentToken !== (token || null)) authSessionVersion += 1;
   currentToken = token || null;
 };
 
@@ -65,6 +70,8 @@ export const apiRequest = async (path, options = {}) => {
     }
     const inflight = publicGetInflight.get(cacheKey);
     if (inflight) return inflight;
+    const failed = publicGetFailures.get(cacheKey);
+    if (failed && Date.now() - failed.savedAt < PUBLIC_GET_FAILURE_COOLDOWN_MS) throw failed.error;
   }
 
   const runRequest = async () => {
@@ -95,14 +102,18 @@ export const apiRequest = async (path, options = {}) => {
 
       const result = { data, status: response.status, headers: response.headers };
       if (canUsePublicGetCache) {
+        publicGetFailures.delete(cacheKey);
         publicGetCache.set(cacheKey, { ...result, savedAt: Date.now() });
       }
       return result;
     } catch (error) {
-      if (error.name === 'AbortError') {
-        throw new ApiError('Request timed out. Please try again.', null, null);
+      const failure = error.name === 'AbortError'
+        ? new ApiError('Request timed out. Please try again.', null, null) : error;
+      if (error.name === 'AbortError') failure.code = 'REQUEST_TIMEOUT';
+      if (canUsePublicGetCache && (!failure.response || failure.response.status >= 500)) {
+        publicGetFailures.set(cacheKey, { error: failure, savedAt: Date.now() });
       }
-      throw error;
+      throw failure;
     } finally {
       clearTimeout(timeoutId);
       if (canUsePublicGetCache) publicGetInflight.delete(cacheKey);
@@ -140,10 +151,10 @@ const isMissingEndpointError = (error) => {
   );
 };
 
-const formDataFrom = (payload = {}) => {
+const formDataFrom = (payload = {}, includeEmpty = false) => {
   const formData = new FormData();
   Object.entries(payload).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== '') {
+    if (value !== undefined && value !== null && (includeEmpty || value !== '')) {
       formData.append(key, value);
     }
   });
@@ -552,14 +563,16 @@ export const getProfile = (options = {}) => apiRequest('/api/auth/me', options);
 export const deleteAccount = () =>
   apiRequest('/api/auth/delete-account', { method: 'DELETE' });
 
-export const updateProfile = async (data = {}) => {
+export const updateProfile = async (data = {}, options = {}) => {
   const imageFile = getProfileImageFile(data);
   const textPayload = withoutProfileImageFields(data);
 
   if (!imageFile) {
     return apiRequest('/api/auth/profile', {
       method: 'PUT',
-      body: formDataFrom(textPayload),
+      body: options.multipart ? formDataFrom(textPayload, true) : textPayload,
+      timeout: 10000,
+      ...options,
     });
   }
 
@@ -571,7 +584,9 @@ export const updateProfile = async (data = {}) => {
         body: formDataFrom({
           ...textPayload,
           [field]: imageFile,
-        }),
+        }, true),
+        timeout: 45000,
+        ...options,
       });
     } catch (error) {
       if (!isUnexpectedUploadFieldError(error)) throw error;
@@ -684,9 +699,9 @@ export const getDirectDownload = (params = {}) =>
   apiRequest('/api/materials/download-direct', { params });
 
 export const getDownloadJob = (jobId) =>
-  apiRequest(`/api/materials/download-job/${jobId}`);
+  apiRequest(`/api/materials/download-job/${jobId}`, { cache: false, timeout: 8000 });
 
-export const getPlans = () => apiRequest('/api/plans');
+export const getPlans = (options = {}) => apiRequest('/api/plans', options);
 
 export const createPaymentOrder = (body) =>
   apiRequest('/api/payments/create-order', {
@@ -718,11 +733,11 @@ export const verifyPaymentSubscription = (body) =>
     body,
   });
 
-export const getTrainingCategories = () =>
-  apiRequest('/api/trainings/categories');
+export const getTrainingCategories = (options = {}) =>
+  apiRequest('/api/trainings/categories', options);
 
-export const getTrainings = (params = {}) =>
-  apiRequest('/api/trainings', { params });
+export const getTrainings = (params = {}, options = {}) =>
+  apiRequest('/api/trainings', { params, ...options });
 
 export const getTestimonials = () => apiRequest('/api/testimonials');
 
@@ -734,7 +749,7 @@ export const getBlogs = (params = {}) =>
 
 export const getBlogBySlug = (slug) => apiRequest(`/api/blogs/${slug}`);
 
-export const getSettings = () => apiRequest('/api/settings');
+export const getSettings = (options = {}) => apiRequest('/api/settings', options);
 
 export const submitContact = (body) =>
   apiRequest('/api/contacts', { method: 'POST', body });

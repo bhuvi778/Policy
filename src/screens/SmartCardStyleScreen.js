@@ -9,8 +9,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { Colors } from '../theme/colors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
-import { getMaterials } from '../services/api';
-import { normalizeMaterials } from '../services/contentMapper';
+import { searchMaterialContent } from '../services/contentMapper';
 
 const { width } = Dimensions.get('window');
 const CARD_W = (width - 40) / 2;
@@ -68,33 +67,31 @@ const SmartCardStyleScreen = ({ navigation }) => {
   const [selectedStyle, setSelectedStyle] = useState(null);
   const [previewVisible, setPreviewVisible] = useState(false);
   const [cardStyles, setCardStyles] = useState(STYLES);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     let active = true;
+    const showTemplates = (templates) => {
+      if (!active || !templates.length) return;
+      setCardStyles(templates.map((item, index) => ({
+        id: item.id,
+        label: item.title || `Template ${index + 1}`,
+        bg: item.color || STYLES[index % STYLES.length].bg,
+        accent: item.raw?.accentColor || STYLES[index % STYLES.length].accent,
+        textColor: item.raw?.textColor || '#fff',
+        image: item.image,
+        raw: item.raw,
+      })));
+    };
     const loadTemplates = async () => {
       try {
-        const response = await getMaterials({ type: 'NFC', page: 1, limit: 20 });
-        let templates = normalizeMaterials(response.data, 'NFC Smart Card');
-        if (!templates.length) {
-          const fallback = await getMaterials({ page: 1, limit: 80 });
-          templates = normalizeMaterials(fallback.data, 'NFC Smart Card').filter((item) => {
-            const text = `${item.title || ''} ${item.subtitle || ''} ${item.type || ''} ${(item.tags || []).join(' ')}`.toLowerCase();
-            return text.includes('nfc') || text.includes('smart card') || text.includes('visiting card');
-          });
-        }
-
-        if (active && templates.length) {
-          setCardStyles(templates.map((item, index) => ({
-            id: item.id,
-            label: item.title || `Template ${index + 1}`,
-            bg: item.color || STYLES[index % STYLES.length].bg,
-            accent: item.raw?.accentColor || STYLES[index % STYLES.length].accent,
-            textColor: item.raw?.textColor || '#fff',
-            image: item.image,
-            raw: item.raw,
-          })));
-        }
+        const templates = await searchMaterialContent('', {
+          section: 'NFC Smart Card',
+          params: { type: 'NFC', page: 1, limit: 100 },
+          predicate: (_, text) => /nfc|smart card|visiting card/.test(text),
+          onCached: showTemplates,
+        });
+        showTemplates(templates);
       } catch (_) {
       } finally {
         if (active) setLoading(false);

@@ -1,10 +1,13 @@
 import Storage from './storage';
+import { isDisplayName, getAdvisorDisplayName } from '../utils/profileIdentity';
+export { isDisplayName, getAdvisorDisplayName } from '../utils/profileIdentity';
 import {
   apiRequest,
   getSettings,
-  getMaterials,
+  getAuthSessionVersion,
 } from './api';
-import { normalizeMaterials } from './contentMapper';
+import { loadCachedMaterialMatches } from './contentMapper';
+import { loadPublicDisplayData } from './publicDataCache';
 
 export const BRAND = {
   name: 'POLICYBHANDAR',
@@ -44,58 +47,26 @@ export const listFromPayload = (payload) => {
 export const pickFirst = (...values) =>
   values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');
 
-export const isDisplayName = (value = '') => {
-  const text = String(value || '').trim();
-  const lower = text.toLowerCase();
-  return (
-    !!text &&
-    !/^\+?\d[\d\s-]{7,}$/.test(text) &&
-    !['user', 'advisor', 'agent', 'member', 'insurance advisor'].includes(lower)
-  );
-};
-
-export const getAdvisorDisplayName = (...sources) => {
-  const candidates = sources.flatMap((user = {}) => [
-    user?.name,
-    user?.fullName,
-    user?.full_name,
-    user?.advisorName,
-    user?.advisor_name,
-    user?.employeeName,
-    user?.employee_name,
-    user?.customerName,
-    user?.customer_name,
-    user?.profile?.name,
-    user?.profile?.fullName,
-    user?.profile?.full_name,
-    user?.user?.name,
-    user?.user?.fullName,
-    user?.data?.name,
-    user?.data?.fullName,
-    [user?.firstName, user?.lastName].filter(Boolean).join(' '),
-    [user?.first_name, user?.last_name].filter(Boolean).join(' '),
-  ]);
-
-  return candidates.find(isDisplayName) || 'Insurance Advisor';
-};
-
-export const loadAppSettings = async () => {
+export const loadAppSettings = async (options = {}) => {
   try {
-    const response = await getSettings();
-    const data = unwrapData(response.data) || {};
-    return {
-      raw: data,
-      brandName: pickFirst(data.brandName, data.appName, data.companyName, BRAND.name),
-      supportPhone: pickFirst(data.supportPhone, data.phone, data.mobile, data.contactPhone, BRAND.phone),
-      supportEmail: pickFirst(data.supportEmail, data.email, data.contactEmail, BRAND.email),
-      address: pickFirst(data.address, data.officeAddress, data.location, BRAND.address),
-      team: Array.isArray(data.team) ? data.team : [],
-      about: data.about || data.aboutUs || COMPANY_DETAILS.about,
-      mission: data.mission || COMPANY_DETAILS.mission,
-      vision: data.vision || COMPANY_DETAILS.vision,
-      terms: Array.isArray(data.terms) ? data.terms : null,
-      privacy: Array.isArray(data.privacy) ? data.privacy : null,
-    };
+    return await loadPublicDisplayData('settings', async () => {
+      const response = await getSettings({ token: null, timeout: 9000 });
+      const data = unwrapData(response.data);
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw Error('Invalid settings response');
+      return {
+        raw: {},
+        brandName: pickFirst(data.brandName, data.appName, data.companyName, BRAND.name),
+        supportPhone: pickFirst(data.supportPhone, data.phone, data.mobile, data.contactPhone, BRAND.phone),
+        supportEmail: pickFirst(data.supportEmail, data.email, data.contactEmail, BRAND.email),
+        address: pickFirst(data.address, data.officeAddress, data.location, BRAND.address),
+        team: Array.isArray(data.team) ? data.team : [],
+        about: data.about || data.aboutUs || COMPANY_DETAILS.about,
+        mission: data.mission || COMPANY_DETAILS.mission,
+        vision: data.vision || COMPANY_DETAILS.vision,
+        terms: Array.isArray(data.terms) ? data.terms : null,
+        privacy: Array.isArray(data.privacy) ? data.privacy : null,
+      };
+    }, options);
   } catch (_) {
     return {
       raw: {},
@@ -212,8 +183,11 @@ export const getSubscriptionInfo = (user = {}) => {
 };
 
 export const loadLocalClients = async () => {
-  const stored = await Storage.getItem(CLIENTS_KEY);
-  return stored ? JSON.parse(stored) : [];
+  try {
+    const stored = await Storage.getItem(CLIENTS_KEY);
+    const clients = stored ? JSON.parse(stored) : [];
+    return Array.isArray(clients) ? clients : [];
+  } catch (_) { return []; }
 };
 
 export const saveLocalClients = async (clients) => {
@@ -243,25 +217,54 @@ const tryApiList = async (paths) => {
     try {
       const response = await apiRequest(path, { timeout: 10000 });
       const list = listFromPayload(response.data).map(normalizeClient);
-      if (list.length) return list;
-    } catch (_) {}
+      return list;
+    } catch (error) {
+      // Alternative routes only help when a route is absent. Retrying a network
+      // outage or an authorization error against every route stalls the screen.
+      if (![404, 405].includes(error?.response?.status)) throw error;
+    }
   }
   return [];
 };
 
-export const loadClients = async () => {
-  const apiClients = await tryApiList([
-    '/api/admin/clients',
-    '/api/admin/customers',
-    '/api/admin/prospects',
-    '/api/user/clients',
-    '/api/users/clients',
-  ]);
-  if (apiClients.length) {
-    await saveLocalClients(apiClients);
-    return apiClients;
+let clientsRequest = null;
+let clientsRequestSession = -1;
+let clientsSnapshot = null;
+export const loadClients = async (options = {}) => {
+  const session = getAuthSessionVersion();
+  // The legacy disk list has no owner. Only publish a previously resolved
+  // current-session list early; never flash another account's legacy cache.
+  if (clientsSnapshot?.session === session && clientsSnapshot.items.length) {
+    options.onCached?.(clientsSnapshot.items);
   }
-  return loadLocalClients();
+  const local = await loadLocalClients();
+  if (session !== getAuthSessionVersion()) return [];
+  if (!clientsRequest || clientsRequestSession !== session) {
+    clientsRequestSession = session;
+    const request = tryApiList([
+      '/api/user/clients', '/api/users/clients', '/api/admin/clients',
+      '/api/admin/customers', '/api/admin/prospects',
+    ]).then(async (apiClients) => {
+      if (session !== getAuthSessionVersion()) return [];
+      if (apiClients.length) {
+        await saveLocalClients(apiClients);
+        return apiClients;
+      }
+      // Keep records entered locally when the server has no copy yet.
+      return loadLocalClients();
+    }).finally(() => { if (clientsRequest === request) clientsRequest = null; });
+    clientsRequest = request;
+  }
+  try {
+    const clients = await clientsRequest;
+    if (session !== getAuthSessionVersion()) return [];
+    clientsSnapshot = { session, items: clients };
+    return clients;
+  } catch (_) {
+    if (session !== getAuthSessionVersion()) return [];
+    clientsSnapshot = { session, items: local };
+    return local;
+  }
 };
 
 export const saveClient = async (client) => {
@@ -283,18 +286,36 @@ export const saveClient = async (client) => {
   return { client: normalized, savedRemotely };
 };
 
-export const loadDueClients = async () => {
-  const clients = await loadClients();
+export const loadDueClients = async (options = {}) => {
+  const clients = await loadClients({ ...options, onCached: (items) => options.onCached?.(items.filter((client) => !!client.dueDate)) });
   return clients.filter((client) => !!client.dueDate);
 };
 
-export const loadDynamicNotifications = async () => {
+let notificationsState = null;
+let notificationsRequest = null;
+export const loadDynamicNotifications = async (options = {}) => {
+  const session = getAuthSessionVersion();
+  if (notificationsState?.session === session) {
+    options.onCached?.(notificationsState.items);
+    if (Date.now() - notificationsState.at < 60000) return notificationsState.items;
+  }
+  if (notificationsRequest?.session === session) return notificationsRequest.promise;
+  const promise = fetchDynamicNotifications().then((items) => {
+    if (session !== getAuthSessionVersion()) return [];
+    notificationsState = { session, items, at: Date.now() };
+    return items;
+  }).catch(() => notificationsState?.session === session ? notificationsState.items : [])
+    .finally(() => { if (notificationsRequest?.promise === promise) notificationsRequest = null; });
+  notificationsRequest = { session, promise };
+  return promise;
+};
+
+const fetchDynamicNotifications = async () => {
   for (const path of ['/api/notifications', '/api/user/notifications', '/api/admin/notifications']) {
     try {
       const response = await apiRequest(path, { timeout: 10000 });
       const items = listFromPayload(response.data);
-      if (items.length) {
-        return items.map((item, index) => ({
+      return items.map((item, index) => ({
           id: String(item._id || item.id || index),
           title: pickFirst(item.title, item.heading, 'Notification'),
           body: pickFirst(item.body, item.message, item.description, ''),
@@ -302,14 +323,15 @@ export const loadDynamicNotifications = async () => {
           time: pickFirst(item.time, item.createdAt, ''),
           unread: item.unread ?? !item.read,
           type: item.type || 'update',
-        }));
-      }
-    } catch (_) {}
+      }));
+    } catch (error) {
+      if (![404, 405].includes(error?.response?.status)) throw error;
+    }
   }
 
   try {
-    const response = await getMaterials({ page: 1, limit: 8 });
-    return normalizeMaterials(response.data, 'Latest Content').map((item) => ({
+    const items = await loadCachedMaterialMatches('', { section: 'Latest Content', limit: 8 });
+    return items.map((item) => ({
       id: item.id,
       title: item.title,
       body: item.subtitle || `${item.type || 'Content'} added to POLICYBHANDAR.`,

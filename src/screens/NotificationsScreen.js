@@ -89,7 +89,9 @@ const NotificationsScreen = ({ navigation }) => {
 
   useEffect(() => {
     let active = true;
-    loadDynamicNotifications()
+    loadDynamicNotifications({ onCached: (items) => {
+      if (active) { setNotifs(items.map(decorateNotification)); setLoading(false); }
+    } })
       .then((items) => {
         if (active) setNotifs(items.map(decorateNotification));
       })

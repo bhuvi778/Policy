@@ -137,15 +137,15 @@ const MediaViewerScreen = ({ route, navigation }) => {
     }
   };
 
-  const prepareShare = async (watermarkType = 'link') => {
-    const result = await prepareMediaShareUrl(item, user, { watermarkType });
+  const prepareShare = async (watermarkType = 'link', remote = false) => {
+    const result = await prepareMediaShareUrl(item, user, { watermarkType, remote });
     return result;
   };
 
   const handleShareLink = async (watermarkType = 'link') => {
     try {
       setActionLoading(true);
-      const result = isDocument ? { url: mediaUrl, item } : await prepareShare(watermarkType);
+      const result = isDocument ? { url: mediaUrl, item } : await prepareShare(watermarkType, true);
       const url = result.url;
       if (PolicyBhandarClipboard?.copyText) {
         await PolicyBhandarClipboard.copyText(url);
@@ -245,7 +245,7 @@ const MediaViewerScreen = ({ route, navigation }) => {
 
       <View style={styles.playerWrap}>
         {shouldPlayVideo && isVideoUrl(mediaUrl) ? (
-          <NativeVideoPlayer source={mediaUrl} poster={thumbnail} style={styles.player} />
+          <NativeVideoPlayer source={mediaUrl} poster={thumbnail} paused={actionLoading || !!preparedAction} style={styles.player} />
         ) : imageSource ? (
           <FastImage
             source={typeof imageSource === 'string' ? { uri: imageSource } : imageSource}
@@ -343,7 +343,8 @@ const MediaViewerScreen = ({ route, navigation }) => {
 
             <View style={styles.generatedPreviewBox}>
               {preparedPreviewUrl && preparedIsVideo && !preparedIsDocument ? (
-                <NativeVideoPlayer source={preparedPreviewUrl} poster={thumbnail} style={styles.generatedPreviewMedia} />
+                <NativeVideoPlayer source={preparedPreviewUrl} poster={thumbnail} style={styles.generatedPreviewMedia}
+                  displayAspectRatio={Number(preparedAction?.result?.width) / Number(preparedAction?.result?.height) || 0} />
               ) : preparedPreviewUrl && !preparedIsDocument ? (
                 <FastImage source={{ uri: preparedPreviewUrl }} style={styles.generatedPreviewMedia} resizeMode="contain" priority="high" />
               ) : preparedIsDocument ? (
@@ -358,7 +359,7 @@ const MediaViewerScreen = ({ route, navigation }) => {
                   <Text style={styles.emptyTitle}>Generated preview</Text>
                 </View>
               )}
-              {preparedPreviewUrl && !preparedIsDocument ? (
+              {preparedPreviewUrl && !preparedIsDocument && !preparedAction?.result?.customized ? (
                 <View style={styles.generatedFooterPreview} pointerEvents="none">
                   <ProfileFooterPreview
                     dark

@@ -12,9 +12,12 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.media.MediaScannerConnection
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.util.Base64
 import androidx.core.content.FileProvider
@@ -25,6 +28,25 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.ReadableType
+import com.facebook.react.modules.core.DeviceEventManagerModule
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.util.Size
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.effect.BitmapOverlay
+import androidx.media3.effect.GlMatrixTransformation
+import androidx.media3.effect.OverlayEffect
+import androidx.media3.transformer.Composition
+import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.Effects
+import androidx.media3.transformer.ExportException
+import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.ProgressHolder
+import androidx.media3.transformer.Transformer
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.UUID
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -35,8 +57,26 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
+@androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 class DownloadModule(private val reactContext: ReactApplicationContext) :
   ReactContextBaseJavaModule(reactContext) {
+
+  private val assets = MediaAssetStore(reactContext)
+  private val mainHandler = Handler(Looper.getMainLooper())
+  private val videoBusy = AtomicBoolean(false)
+  private var activeTransformer: Transformer? = null
+  private var activeExportCancel: (() -> Unit)? = null
+
+  override fun invalidate() {
+    mainHandler.post { activeExportCancel?.invoke(); activeExportCancel = null; activeTransformer = null }
+    super.invalidate()
+  }
+
+  private fun sendProgress(phase: String, percent: Int = -1) {
+    if (!reactContext.hasActiveReactInstance()) return
+    val event = Arguments.createMap().apply { putString("phase", phase); putInt("percent", percent) }
+    runCatching { reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java).emit("PolicyBhandarExportProgress", event) }
+  }
 
   private data class CustomizationOptions(
     val recipientType: String = "",
@@ -55,15 +95,170 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
     val advisorMobile: String = "",
     val advisorEmail: String = "",
     val logoUrl: String = "",
+    val profileImageUrl: String = "",
     val logoOverlayUrl: String = "",
     val logoOverlayX: Double = 0.06,
     val logoOverlayY: Double = 0.06,
     val qrCodeUrl: String = "",
+    val qrData: String = "",
     val qrPosition: String = "right",
     val generatedDate: String = ""
   )
 
   override fun getName(): String = "PolicyBhandarDownloader"
+
+  @ReactMethod
+  fun prepareCustomizedImage(url: String, fileName: String?, options: ReadableMap?, promise: Promise) {
+    val customization = optionsFromReadableMap(options)
+    sendProgress("loading")
+    Thread {
+      var source: Bitmap? = null
+      var output: Bitmap? = null
+      try {
+        source = loadBitmap(url)
+        output = drawCustomizedImage(source, customization)
+        val file = newPreparedFile("jpg")
+        file.outputStream().use { check(output.compress(Bitmap.CompressFormat.JPEG, 94, it)) }
+        promise.resolve(preparedResult(file, safeImageFileName(fileName), "image/jpeg", output.width, output.height))
+      } catch (error: Exception) { promise.reject("PREPARE_IMAGE_FAILED", error.message, error) }
+      finally { if (output != source) output?.recycle(); source?.recycle() }
+    }.start()
+  }
+
+  @ReactMethod
+  fun prepareCustomizedVideo(url: String, fileName: String?, options: ReadableMap?, promise: Promise) {
+    if (!videoBusy.compareAndSet(false, true)) {
+      promise.reject("EXPORT_BUSY", "A reel is already being prepared. Please wait for it to finish.")
+      return
+    }
+    val customization = optionsFromReadableMap(options)
+    sendProgress("loading")
+    Thread {
+      var overlay: Bitmap? = null
+      var outputFile: File? = null
+      try {
+        val source = assets.localFile(url)
+        val metadata = MediaMetadataRetriever()
+        val dimensions = try {
+          metadata.setDataSource(source.path)
+          val w = metadata.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+          val h = metadata.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+          val rotation = metadata.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+          if (rotation % 180 != 0) Pair(h, w) else Pair(w, h)
+        } finally { metadata.release() }
+        require(dimensions.first > 0 && dimensions.second > 0) { "This reel has no supported video track." }
+        val scale = min(1.0, 1280.0 / max(dimensions.first, dimensions.second))
+        val width = ((dimensions.first * scale).toInt() / 2 * 2).coerceAtLeast(2)
+        val height = ((dimensions.second * scale).toInt() / 2 * 2).coerceAtLeast(2)
+        val footerHeight = ((width * 0.24f).toInt() / 2 * 2).coerceAtLeast(2)
+        val totalHeight = height + footerHeight
+        val bitmap = Bitmap.createBitmap(width, totalHeight, Bitmap.Config.ARGB_8888)
+        overlay = bitmap
+        val canvas = Canvas(bitmap)
+        drawTextWatermark(canvas, width, height, customization)
+        if (customization.includeLogoOverlay) drawTemplateLogoOverlay(canvas, width, height, customization)
+        drawFooterBand(canvas, width, height, footerHeight.toFloat(), customization)
+        val file = newPreparedFile("mp4")
+        outputFile = file
+        val matrix = FloatArray(16).also {
+          android.opengl.Matrix.setIdentityM(it, 0)
+          it[5] = height.toFloat() / totalHeight
+          it[13] = footerHeight.toFloat() / totalHeight
+        }
+        val framing = object : GlMatrixTransformation {
+          override fun configure(inputWidth: Int, inputHeight: Int): Size = Size(width, totalHeight)
+          override fun getGlMatrixArray(presentationTimeUs: Long): FloatArray = matrix
+        }
+        mainHandler.post {
+          try {
+            val handler = Handler(Looper.getMainLooper())
+            val done = AtomicBoolean(false)
+            var monitor: Runnable? = null
+            val started = System.currentTimeMillis()
+            val listener = object : Transformer.Listener {
+              override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                if (!done.compareAndSet(false, true)) return
+                monitor?.let { handler.removeCallbacks(it) }
+                activeTransformer = null
+                activeExportCancel = null
+                videoBusy.set(false)
+                bitmap.recycle()
+                sendProgress("ready", 100)
+                try { promise.resolve(preparedResult(file, safeFileName(fileName, "video/mp4", url).substringBeforeLast('.') + ".mp4", "video/mp4", width, totalHeight)) }
+                catch (error: Exception) { promise.reject("PREPARE_VIDEO_FAILED", error.message, error) }
+              }
+              override fun onError(composition: Composition, exportResult: ExportResult, exception: ExportException) {
+                if (!done.compareAndSet(false, true)) return
+                monitor?.let { handler.removeCallbacks(it) }
+                activeTransformer = null
+                activeExportCancel = null
+                videoBusy.set(false)
+                bitmap.recycle()
+                file.delete()
+                promise.reject("PREPARE_VIDEO_FAILED", "Unable to personalize this reel. Please try again.", exception)
+              }
+            }
+            val transformer = Transformer.Builder(reactContext)
+              .setVideoMimeType(MimeTypes.VIDEO_H264)
+              .setAudioMimeType(MimeTypes.AUDIO_AAC)
+              .addListener(listener).build()
+            activeTransformer = transformer
+            activeExportCancel = {
+              if (done.compareAndSet(false, true)) {
+                monitor?.let { handler.removeCallbacks(it) }
+                transformer.cancel(); bitmap.recycle(); file.delete(); videoBusy.set(false)
+                promise.reject("EXPORT_CANCELLED", "Reel preparation was cancelled. Please retry.")
+              }
+            }
+            val edited = EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(source)))
+              .setEffects(Effects(emptyList(), listOf(framing, OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(bitmap))))))
+              .build()
+            transformer.start(edited, file.path)
+            monitor = object : Runnable {
+              override fun run() {
+                if (done.get()) return
+                if (System.currentTimeMillis() - started > 180000) {
+                  done.set(true); transformer.cancel(); activeTransformer = null; activeExportCancel = null
+                  bitmap.recycle(); file.delete(); videoBusy.set(false)
+                  promise.reject("EXPORT_TIMEOUT", "This reel took too long to prepare. Please try a shorter reel or retry.")
+                  return
+                }
+                val progress = ProgressHolder()
+                if (transformer.getProgress(progress) == Transformer.PROGRESS_STATE_AVAILABLE) sendProgress("exporting", progress.progress)
+                handler.postDelayed(this, 500)
+              }
+            }
+            handler.post(monitor!!)
+          } catch (error: Exception) {
+            activeTransformer?.cancel(); activeTransformer = null; activeExportCancel = null
+            videoBusy.set(false); bitmap.recycle(); file.delete()
+            promise.reject("PREPARE_VIDEO_FAILED", error.message, error)
+          }
+        }
+      } catch (error: Exception) {
+        videoBusy.set(false); overlay?.recycle(); outputFile?.delete()
+        promise.reject("PREPARE_VIDEO_FAILED", error.message, error)
+      }
+    }.start()
+  }
+
+  private fun newPreparedFile(extension: String): File {
+    val dir = File(reactContext.cacheDir, "policybhandar-share").apply { mkdirs() }
+    val expiry = System.currentTimeMillis() - 3 * 24 * 60 * 60 * 1000L
+    dir.listFiles()?.filter { it.lastModified() < expiry }?.forEach { it.delete() }
+    return File(dir, "prepared-${UUID.randomUUID()}.$extension")
+  }
+
+  private fun preparedResult(file: File, name: String, mime: String, width: Int = 0, height: Int = 0) = Arguments.createMap().apply {
+    putString("filename", name)
+    putString("fileUri", Uri.fromFile(file).toString())
+    putString("contentUri", fileToContentUri(file).toString())
+    putString("mimeType", mime)
+    putBoolean("customized", true)
+    putBoolean("savedToDevice", false)
+    putInt("width", width)
+    putInt("height", height)
+  }
 
   @ReactMethod
   fun download(url: String, fileName: String?, mimeType: String?, promise: Promise) {
@@ -280,7 +475,9 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
       ),
       logoOverlayX = readDouble(options, "logoOverlayX", readDouble(options, "logoX", 0.06)),
       logoOverlayY = readDouble(options, "logoOverlayY", readDouble(options, "logoY", 0.06)),
+      profileImageUrl = readString(options, "profileImageUrl"),
       qrCodeUrl = readString(options, "qrCodeUrl"),
+      qrData = readString(options, "qrData"),
       qrPosition = readString(options, "qrPosition")
         .ifBlank { readString(options, "qrCodePosition") }
         .ifBlank { "right" },
@@ -324,42 +521,12 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
   }
 
   private fun downloadUrlToDownloads(url: String, fileName: String, mimeType: String?): String {
-    val connection = openHttpConnection(url)
-    try {
-      val status = connection.responseCode
-      if (status !in 200..299) {
-        throw IOException("Download failed with status $status.")
-      }
-      val resolvedMime = mimeType?.takeIf { it.isNotBlank() }
-        ?: connection.contentType?.substringBefore(";")?.takeIf { it.isNotBlank() }
-        ?: "application/octet-stream"
-
-      connection.inputStream.use { input ->
-        saveStreamToDownloads(input, fileName, resolvedMime)
-      }
-      return fileName
-    } finally {
-      connection.disconnect()
-    }
+    val local = assets.localFile(url)
+    local.inputStream().use { saveStreamToDownloads(it, fileName, resolveMimeType(mimeType, fileName)) }
+    return fileName
   }
 
-  private fun loadBitmap(url: String): Bitmap {
-    val connection = openHttpConnection(url)
-
-    try {
-      val status = connection.responseCode
-      if (status !in 200..299) {
-        throw IOException("Image download failed with status $status.")
-      }
-
-      connection.inputStream.use { stream ->
-        return BitmapFactory.decodeStream(stream)
-          ?: throw IOException("Downloaded file is not a supported image.")
-      }
-    } finally {
-      connection.disconnect()
-    }
-  }
+  private fun loadBitmap(url: String): Bitmap = assets.bitmap(url)
 
   private fun openHttpConnection(url: String): HttpURLConnection {
     return (URL(url).openConnection() as HttpURLConnection).apply {
@@ -390,28 +557,11 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
   }
 
   private fun downloadUrlToShareCache(url: String, fileName: String, mimeType: String): Uri {
-    val connection = openHttpConnection(url)
-    try {
-      val status = connection.responseCode
-      if (status !in 200..299) {
-        throw IOException("Share file download failed with status $status.")
-      }
-
-      val cacheDir = File(reactContext.cacheDir, "policybhandar-share")
-      if (!cacheDir.exists() && !cacheDir.mkdirs()) {
-        throw IOException("Unable to prepare share cache.")
-      }
-
-      val outputFile = File(cacheDir, fileName)
-      connection.inputStream.use { input ->
-        FileOutputStream(outputFile).use { output ->
-          input.copyTo(output)
-        }
-      }
-      return fileToContentUri(outputFile)
-    } finally {
-      connection.disconnect()
-    }
+    val source = assets.localFile(url)
+    val directory = File(reactContext.cacheDir, "policybhandar-share").apply { mkdirs() }
+    val file = File(directory, "${source.name.take(24)}-$fileName")
+    if (!file.exists() || file.lastModified() < source.lastModified()) source.copyTo(file, overwrite = true)
+    return fileToContentUri(file)
   }
 
   private fun fileToContentUri(file: File): Uri {
@@ -490,22 +640,8 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
   }
 
   private fun drawCustomizedImage(source: Bitmap, options: CustomizationOptions): Bitmap {
-    val normalizedType = options.watermarkType.lowercase()
-    val appendQrFooter = normalizedType == "whatsapp" || normalizedType == "link"
-    val hasFooter = options.includeWatermark ||
-      options.includeLogo ||
-      options.includeSocialCaption ||
-      options.includeQrCode
-    val profileFooterHeight = if (hasFooter && !appendQrFooter) {
-      max((source.height * 0.23f).toInt(), (source.width * 0.24f).toInt())
-    } else {
-      0
-    }
-    val cardHeight = if (appendQrFooter) {
-      max((source.height * 0.28f).toInt(), (source.width * 0.52f).toInt())
-    } else {
-      profileFooterHeight
-    }
+    val hasFooter = options.includeWatermark || options.includeLogo || options.includeSocialCaption || options.includeQrCode
+    val cardHeight = if (hasFooter) (source.width * 0.24f).toInt().coerceAtLeast(2) else 0
 
     val result = if (cardHeight > 0) {
       Bitmap.createBitmap(source.width, source.height + cardHeight, Bitmap.Config.ARGB_8888).also {
@@ -523,27 +659,42 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
       canvas.drawBitmap(source, 0f, 0f, null)
     }
 
+    drawTextWatermark(canvas, source.width, source.height, options)
     if (options.includeLogoOverlay) {
       drawTemplateLogoOverlay(canvas, source.width, source.height, options)
     }
 
-    if (hasFooter) {
-      if (appendQrFooter) {
-        drawQrAppendFooter(canvas, source.width, source.height, cardHeight.toFloat(), options)
-      } else {
-        drawFooterBand(canvas, result.width, source.height, cardHeight.toFloat(), options)
-      }
-    }
+    if (hasFooter) drawFooterBand(canvas, result.width, source.height, cardHeight.toFloat(), options)
 
     return result
   }
 
+  private fun drawTextWatermark(canvas: Canvas, width: Int, height: Int, options: CustomizationOptions) {
+    if (!options.includeWatermark) return
+    val text = options.watermarkText.ifBlank { options.advisorName }.trim()
+    if (text.isBlank()) return
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+      color = watermarkBaseColor(options.fontColor)
+      alpha = 46
+      textAlign = Paint.Align.CENTER
+      typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+      textSize = width * 0.055f
+    }
+    val available = width * 0.85f
+    if (paint.measureText(text) > available) paint.textSize *= available / paint.measureText(text)
+    canvas.save()
+    if (options.watermarkOrientation == "diagonal") canvas.rotate(-25f, width / 2f, height / 2f)
+    canvas.drawText(text, width / 2f, height / 2f - (paint.ascent() + paint.descent()) / 2f, paint)
+    canvas.restore()
+  }
+
   private fun drawTemplateLogoOverlay(canvas: Canvas, width: Int, imageHeight: Int, options: CustomizationOptions) {
     val rawLogoUrl = options.logoOverlayUrl.ifBlank { options.logoUrl }
-    val logoBitmap = loadOptionalBitmap(rawLogoUrl) ?: return
+    val logoBitmap = loadBrandBitmap(rawLogoUrl) ?: return
     try {
       val minSide = min(width, imageHeight).toFloat()
-      val size = (minSide * 0.16f).coerceIn(52f, minSide * 0.28f)
+      val maximumSize = minSide * 0.28f
+      val size = (minSide * 0.16f).coerceIn(min(52f, maximumSize), maximumSize)
       val pad = (size * 0.11f).coerceIn(5f, 12f)
       val maxX = max(0f, width - size)
       val maxY = max(0f, imageHeight - size)
@@ -569,146 +720,6 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
-  private fun drawQrAppendFooter(canvas: Canvas, width: Int, imageHeight: Int, footerHeight: Float, options: CustomizationOptions) {
-    val top = imageHeight.toFloat()
-    val bottom = top + footerHeight
-    val centerX = width / 2f
-    val textColor = Color.rgb(15, 23, 42)
-    val subTextColor = Color.rgb(51, 65, 85)
-
-    val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = Color.WHITE
-      setShadowLayer(max(4f, width * 0.012f), 0f, -max(2f, width * 0.004f), Color.argb(45, 0, 0, 0))
-    }
-    canvas.drawRect(0f, top, width.toFloat(), bottom, bgPaint)
-    Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = Color.rgb(17, 24, 39)
-      strokeWidth = max(2f, min(width, imageHeight) * 0.003f)
-      canvas.drawLine(0f, top, width.toFloat(), top, this)
-    }
-
-    val headerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = textColor
-      textAlign = Paint.Align.CENTER
-      typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-      textSize = (width * 0.038f).coerceIn(18f, 42f)
-    }
-    val header = if (options.watermarkType.equals("link", ignoreCase = true)) {
-      "For more info, scan or open the shared link"
-    } else {
-      "Scan QR for more details"
-    }
-    var y = top + footerHeight * 0.12f
-    canvas.drawText(ellipsize(header, headerPaint, width * 0.9f), centerX, y, headerPaint)
-
-    val qrBitmap = loadOptionalBitmap(options.qrCodeUrl)
-      ?: createQrPlaceholder((width * 0.42f).toInt().coerceAtLeast(180), qrSeed(options))
-    val maxQrWidth = width * 0.45f
-    val maxQrHeight = footerHeight * 0.58f
-    val ratio = min(maxQrWidth / qrBitmap.width, maxQrHeight / qrBitmap.height)
-    val qrWidth = qrBitmap.width * ratio
-    val qrHeight = qrBitmap.height * ratio
-    y += footerHeight * 0.07f
-    val qrRect = RectF(centerX - qrWidth / 2f, y, centerX + qrWidth / 2f, y + qrHeight)
-    drawBitmapFit(canvas, qrBitmap, qrRect, 0f)
-    Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = Color.rgb(220, 38, 38)
-      style = Paint.Style.STROKE
-      strokeWidth = max(4f, width * 0.008f)
-      canvas.drawRect(qrRect, this)
-    }
-    if (!qrBitmap.isRecycled) qrBitmap.recycle()
-
-    val footerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = textColor
-      textAlign = Paint.Align.CENTER
-      typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-      textSize = (width * 0.04f).coerceIn(18f, 46f)
-    }
-    val name = options.advisorName.ifBlank { options.recipientName }.uppercase()
-    val phone = options.advisorMobile
-    val footerText = when {
-      name.isNotBlank() && phone.isNotBlank() -> "$name | $phone"
-      name.isNotBlank() -> name
-      phone.isNotBlank() -> phone
-      else -> "POLICYBHANDAR"
-    }
-    val maxWidth = width * 0.9f
-    while (footerPaint.measureText(footerText) > maxWidth && footerPaint.textSize > 14f) {
-      footerPaint.textSize *= 0.92f
-    }
-    canvas.drawText(ellipsize(footerText, footerPaint, maxWidth), centerX, min(bottom - footerHeight * 0.08f, qrRect.bottom + footerHeight * 0.14f), footerPaint)
-
-    if (options.watermarkType.equals("link", ignoreCase = true) && options.advisorEmail.isNotBlank()) {
-      val emailPaint = Paint(footerPaint).apply {
-        color = subTextColor
-        textSize = footerPaint.textSize * 0.72f
-        typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
-      }
-      canvas.drawText(ellipsize(options.advisorEmail, emailPaint, maxWidth), centerX, bottom - footerHeight * 0.025f, emailPaint)
-    }
-  }
-
-  private fun drawSingleLineWatermark(
-    canvas: Canvas,
-    width: Int,
-    height: Int,
-    text: String,
-    requestedColor: String?,
-    orientation: String
-  ) {
-    val minSide = min(width, height).toFloat()
-    val fillColor = watermarkBaseColor(requestedColor)
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      textAlign = Paint.Align.CENTER
-      typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-    }
-
-    val normalizedOrientation = orientation.lowercase()
-    val rotation = when (normalizedOrientation) {
-      "horizontal" -> 0f
-      "vertical" -> -90f
-      else -> -32f
-    }
-    val maxTextWidth = when (normalizedOrientation) {
-      "vertical" -> height * 0.72f
-      "horizontal" -> width * 0.76f
-      else -> min(width, height) * 0.9f
-    }
-    var textSize = (minSide * 0.19f).coerceIn(42f, 136f)
-    paint.textSize = textSize
-    while (paint.measureText(text) > maxTextWidth && textSize > 28f) {
-      textSize *= 0.92f
-      paint.textSize = textSize
-    }
-
-    val outlinePaint = Paint(paint).apply {
-      style = Paint.Style.STROKE
-      strokeWidth = max(1.5f, textSize / 24f)
-      color = Color.argb(
-        24,
-        255 - Color.red(fillColor),
-        255 - Color.green(fillColor),
-        255 - Color.blue(fillColor)
-      )
-    }
-
-    val centerX = width / 2f
-    val centerY = height / 2f - (paint.descent() + paint.ascent()) / 2f
-
-    canvas.save()
-    canvas.rotate(rotation, width / 2f, height / 2f)
-    paint.color = Color.argb(
-      72,
-      Color.red(fillColor),
-      Color.green(fillColor),
-      Color.blue(fillColor)
-    )
-    canvas.drawText(text, centerX, centerY, outlinePaint)
-    canvas.drawText(text, centerX, centerY, paint)
-    canvas.restore()
-  }
-
   private fun drawFooterBand(canvas: Canvas, width: Int, imageHeight: Int, footerHeight: Float, options: CustomizationOptions) {
     val minSide = min(width, imageHeight).toFloat()
     val top = imageHeight.toFloat()
@@ -729,7 +740,8 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
       canvas.drawLine(0f, top, width.toFloat(), top, this)
     }
 
-    val logoSize = (footerHeight - pad * 1.35f).coerceIn(minSide * 0.12f, footerHeight * 0.88f)
+    val logoSize = (footerHeight - pad * 1.35f)
+      .coerceIn(minSide * 0.12f, footerHeight * 0.88f).coerceAtMost(width * 0.18f)
     val qrOnLeft = options.qrPosition.equals("left", ignoreCase = true)
     var textLeft = pad
     var textRight = width - pad
@@ -737,8 +749,8 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
     val qrSize = logoSize
     var qrBitmap: Bitmap? = null
     if (options.includeQrCode) {
-      qrBitmap = loadOptionalBitmap(options.qrCodeUrl)
-        ?: createQrPlaceholder(qrSize.toInt(), qrSeed(options))
+      qrBitmap = if (options.qrData.isNotBlank()) createQrBitmap(qrSize.toInt(), options.qrData) else loadOptionalBitmap(options.qrCodeUrl)
+        ?: createQrBitmap(qrSize.toInt(), qrSeed(options))
       val qrRect = if (qrOnLeft) {
         RectF(pad, top + pad, pad + qrSize, top + pad + qrSize)
       } else {
@@ -757,7 +769,7 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
       } else {
         RectF(pad, top + pad * 0.58f, pad + logoSize, top + pad * 0.58f + logoSize)
       }
-      logoBitmap = loadOptionalBitmap(options.logoUrl)
+      logoBitmap = loadBrandBitmap(options.profileImageUrl.ifBlank { options.logoUrl })
       drawProfileBadge(canvas, logoRect, logoBitmap, options, profileAccent, corner)
       if (options.includeQrCode && qrOnLeft) textRight = min(textRight, logoRect.left - pad)
       else textLeft = max(textLeft, logoRect.right + pad * 0.42f)
@@ -964,6 +976,11 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
     canvas.drawBitmap(bitmap, null, fitted, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
   }
 
+  private fun loadBrandBitmap(url: String): Bitmap? {
+    if (url.isBlank()) return null
+    return loadOptionalBitmap(url) ?: throw IOException("Your profile photo/logo could not be loaded. Please update it in My Profile and retry.")
+  }
+
   private fun loadOptionalBitmap(url: String): Bitmap? {
     val raw = url.trim()
     if (raw.isBlank()) return null
@@ -981,80 +998,19 @@ class DownloadModule(private val reactContext: ReactApplicationContext) :
           )
           if (resourceId != 0) BitmapFactory.decodeResource(reactContext.resources, resourceId) else null
         }
-        raw.startsWith("http://", ignoreCase = true) || raw.startsWith("https://", ignoreCase = true) -> {
-          loadBitmap(raw)
-        }
-        raw.startsWith("content://", ignoreCase = true) -> {
-          reactContext.contentResolver.openInputStream(Uri.parse(raw))?.use { stream ->
-            BitmapFactory.decodeStream(stream)
-          }
-        }
-        raw.startsWith("file://", ignoreCase = true) -> {
-          BitmapFactory.decodeFile(Uri.parse(raw).path)
-        }
-        raw.startsWith("data:image", ignoreCase = true) -> {
-          val base64Data = raw.substringAfter(",", "")
-          if (base64Data.isBlank()) null else {
-            val bytes = Base64.decode(base64Data, Base64.DEFAULT)
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-          }
-        }
-        else -> {
-          val file = File(raw)
-          if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
-        }
+        else -> assets.bitmap(raw, 512)
       }
     } catch (_: Exception) {
       null
     }
   }
 
-  private fun createQrPlaceholder(size: Int, seed: String): Bitmap {
-    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(bitmap)
-    val white = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
-    val black = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
-    canvas.drawRect(0f, 0f, size.toFloat(), size.toFloat(), white)
-
-    val grid = 25
-    val quiet = 2
-    val cell = size.toFloat() / grid
-    drawQrFinder(canvas, black, white, cell, quiet, quiet)
-    drawQrFinder(canvas, black, white, cell, grid - quiet - 7, quiet)
-    drawQrFinder(canvas, black, white, cell, quiet, grid - quiet - 7)
-
-    val base = seed.ifBlank { "PolicyBhandar" }
-    for (row in quiet until grid - quiet) {
-      for (col in quiet until grid - quiet) {
-        val inFinder =
-          (row < 9 && col < 9) ||
-            (row < 9 && col > grid - 10) ||
-            (row > grid - 10 && col < 9)
-        if (inFinder) continue
-
-        val value = abs((base.hashCode() + row * 31 + col * 17 + row * col * 7) % 11)
-        if (value == 0 || value == 3 || value == 7) {
-          canvas.drawRect(col * cell, row * cell, (col + 1) * cell, (row + 1) * cell, black)
-        }
-      }
-    }
-
-    return bitmap
-  }
-
-  private fun drawQrFinder(canvas: Canvas, black: Paint, white: Paint, cell: Float, col: Int, row: Int) {
-    fun rect(offset: Int, span: Int, paint: Paint) {
-      canvas.drawRect(
-        (col + offset) * cell,
-        (row + offset) * cell,
-        (col + offset + span) * cell,
-        (row + offset + span) * cell,
-        paint
-      )
-    }
-    rect(0, 7, black)
-    rect(1, 5, white)
-    rect(2, 3, black)
+  private fun createQrBitmap(size: Int, seed: String): Bitmap {
+    val matrix = QRCodeWriter().encode(seed.ifBlank { "POLICYBHANDAR" }, BarcodeFormat.QR_CODE, size.coerceAtLeast(64), size.coerceAtLeast(64))
+    val result = Bitmap.createBitmap(matrix.width, matrix.height, Bitmap.Config.ARGB_8888)
+    val pixels = IntArray(matrix.width * matrix.height) { index -> if (matrix[index % matrix.width, index / matrix.width]) Color.BLACK else Color.WHITE }
+    result.setPixels(pixels, 0, matrix.width, 0, 0, matrix.width, matrix.height)
+    return result
   }
 
   private fun qrSeed(options: CustomizationOptions): String =

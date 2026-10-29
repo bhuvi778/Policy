@@ -63,6 +63,7 @@ yarn-error.*
 /docs/screenshots/
 
 # release artifacts and local verification captures
+/outputs/
 /*.apk
 /*.aab
 /*.zip

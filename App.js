@@ -3,7 +3,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 
 import SplashScreen from './src/screens/SplashScreen';
@@ -125,7 +125,7 @@ const RootNavigator = () => {
       <Stack.Screen name="MyProfile" component={MyProfileScreen} options={slideFromRight} />
       <Stack.Screen name="AboutUs" component={AboutUsScreen} options={slideFromRight} />
       <Stack.Screen name="ContactUs" component={ContactUsScreen} options={slideFromRight} />
-      <Stack.Screen name="RateUs" component={RateUsScreen} options={slideFromRight} />
+      {Platform.OS === 'android' && <Stack.Screen name="RateUs" component={RateUsScreen} options={slideFromRight} />}
       <Stack.Screen name="Terms" component={TermsScreen} options={slideFromRight} />
       <Stack.Screen name="Privacy" component={PrivacyPolicyScreen} options={slideFromRight} />
       <Stack.Screen name="Utility" component={UtilityScreen} options={slideFromRight} />
@@ -135,7 +135,7 @@ const RootNavigator = () => {
       <Stack.Screen name="Subscription" component={SubscriptionRoute} options={slideFromRight} />
       <Stack.Screen name="PaymentWebView" component={PaymentWebViewRoute} options={slideFromRight} />
       <Stack.Screen name="Onboarding" component={OnboardingScreen} options={{ gestureEnabled: false, cardStyleInterpolator: ({ current }) => ({ cardStyle: { opacity: current.progress } }) }} />
-      <Stack.Screen name="SmartCardReview" component={SmartCardReviewScreen} options={slideFromRight} />
+      {Platform.OS === 'android' && <Stack.Screen name="SmartCardReview" component={SmartCardReviewScreen} options={slideFromRight} />}
       <Stack.Screen name="PremiumCalendar" component={PremiumCalendarScreen} options={slideFromRight} />
       <Stack.Screen name="DataEntry" component={DataEntryScreen} options={slideFromRight} />
       <Stack.Screen name="NFCSmartCard" component={NFCSmartCardScreen} options={slideFromRight} />

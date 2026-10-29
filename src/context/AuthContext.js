@@ -1,4 +1,9 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
+import { getProfileImageUrl } from '../utils/profileAssets';
+import { normalizeProfileFields } from '../utils/profileFields';
+import { restoreProfileSupplement, persistProfileSupplement } from '../services/profileSupplement';
+import { queueProfileUpdate, syncQueuedProfile } from '../services/profileSync';
+import { AppState } from 'react-native';
 import Storage from '../services/storage';
 import { setAuthToken, getProfile } from '../services/api';
 
@@ -28,22 +33,8 @@ const isDisplayName = (value = '') => {
   );
 };
 
-const extractUserData = (payload) => {
+export const extractUserData = (payload) => {
   if (!isObject(payload)) return null;
-
-  const direct = [
-    payload.user,
-    payload.profile,
-    payload.advisor,
-    payload.employee,
-    payload.customer,
-    payload.member,
-    payload.account,
-  ].find(isObject);
-  if (direct) return extractUserData(direct) || direct;
-
-  if (isObject(payload.success)) return extractUserData(payload.success) || payload.success;
-  if (isObject(payload.data)) return extractUserData(payload.data) || payload.data;
 
   if (
     payload.name ||
@@ -74,14 +65,21 @@ const extractUserData = (payload) => {
     return payload;
   }
 
+  for (const nested of [payload.user, payload.profile, payload.advisor, payload.employee,
+    payload.customer, payload.member, payload.account, payload.success, payload.data]) {
+    const extracted = extractUserData(nested);
+    if (extracted) return extracted;
+  }
+
   return null;
 };
 
-const mergeUserData = (previous, next) => {
+export const mergeUserData = (previous, next) => {
   if (!previous) return next;
   if (!next) return previous;
 
-  const merged = { ...previous, ...next };
+  const merged = { ...previous, ...next, ...(previous._pendingProfilePatch || {}) };
+  const freshImage = getProfileImageUrl(next);
   const keepPreviousWhenNextIsBlank = [
     'name',
     'fullName',
@@ -113,12 +111,13 @@ const mergeUserData = (previous, next) => {
       merged[key] = previous[key];
     }
   });
+  if (freshImage && !previous._pendingProfilePatch?.profileImage) merged.profileImage = freshImage;
 
   if (!isDisplayName(merged.name) && isDisplayName(previous.name)) {
     merged.name = previous.name;
   }
 
-  return merged;
+  return normalizeProfileFields(merged);
 };
 
 const clearAuthStorage = async () => {
@@ -133,20 +132,37 @@ export const AuthProvider = ({ children }) => {
   const [onboardingDone, setOnboardingDone] = useState(false);
   const [logoutVersion,  setLogoutVersion]  = useState(0);
   const authEpochRef = useRef(0);
+  const userRef = useRef(user);
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+  userRef.current = user;
+  const profileRequestRef = useRef(null);
+  const lastProfileRefreshRef = useRef(0);
 
   useEffect(() => {
     loadSession();
   }, []);
 
-  const refreshProfileInBackground = async (previousUser = null, epoch = authEpochRef.current) => {
+  const refreshProfileInBackground = useCallback(async (previousUser = null, epoch = authEpochRef.current, options = {}) => {
     try {
+      const queued = previousUser ? await syncQueuedProfile(previousUser, {
+        token: tokenRef.current, extractUser: extractUserData, isCurrent: () => epoch === authEpochRef.current, force: !!options.force,
+      }) : null;
+      if (epoch !== authEpochRef.current) return;
+      if (queued?.user) {
+        setUser(queued.user);
+        userRef.current = queued.user;
+        await Storage.setItem(USER_KEY, JSON.stringify(queued.user));
+        return queued.user;
+      }
       const profileRes = await getProfile({ timeout: 6000 });
       if (epoch !== authEpochRef.current) return;
       const userData = extractUserData(profileRes.data);
       if (userData) {
         const mergedUser = mergeUserData(previousUser, userData);
         if (epoch !== authEpochRef.current) return;
-        setUser(mergedUser);
+        setUser((current) => JSON.stringify(current) === JSON.stringify(mergedUser) ? current : mergedUser);
+        lastProfileRefreshRef.current = Date.now();
         await Storage.setItem(USER_KEY, JSON.stringify(mergedUser));
         return mergedUser;
       }
@@ -154,7 +170,7 @@ export const AuthProvider = ({ children }) => {
       console.log('Failed to fetch fresh user profile from backend:', err.message);
     }
     return null;
-  };
+  }, []);
 
   const loadSession = async () => {
     try {
@@ -172,9 +188,10 @@ export const AuthProvider = ({ children }) => {
         if (storedOnboard === 'true') setOnboardingDone(true);
         return;
       }
-      const parsedStoredUser = storedUser ? JSON.parse(storedUser) : null;
+      const parsedStoredUser = storedUser ? await restoreProfileSupplement(JSON.parse(storedUser)) : null;
       if (parsedStoredUser) setUser(parsedStoredUser);
       if (storedToken) {
+        tokenRef.current = storedToken;
         const epoch = authEpochRef.current;
         setToken(storedToken);
         setAuthToken(storedToken);
@@ -193,14 +210,15 @@ export const AuthProvider = ({ children }) => {
       await Storage.removeItem(FORCE_LOGOUT_KEY);
       await Storage.setItem(TOKEN_KEY, authToken);
       setToken(authToken);
+      tokenRef.current = authToken;
       setAuthToken(authToken);
-      const normalizedUser = extractUserData(userData) || userData;
+      const normalizedUser = userData ? await restoreProfileSupplement(extractUserData(userData) || userData) : null;
       if (normalizedUser) {
         await Storage.setItem(USER_KEY, JSON.stringify(normalizedUser));
         setUser(normalizedUser);
       }
 
-      refreshProfileInBackground(normalizedUser, epoch);
+      refreshProfileInBackground(normalizedUser, epoch, { force: true });
     } catch (_) {}
   };
 
@@ -209,14 +227,16 @@ export const AuthProvider = ({ children }) => {
     try {
       const epoch = authEpochRef.current + 1;
       authEpochRef.current = epoch;
-      const normalizedUser = extractUserData(userData) || userData;
+      const normalizedUser = await restoreProfileSupplement(extractUserData(userData) || userData);
+      await persistProfileSupplement(normalizedUser);
       await Storage.removeItem(FORCE_LOGOUT_KEY);
       await Storage.setItem(USER_KEY,  JSON.stringify(normalizedUser));
       await Storage.setItem(TOKEN_KEY, authToken || '');
       setUser(normalizedUser);
       setToken(authToken);
+      tokenRef.current = authToken;
       setAuthToken(authToken);
-      refreshProfileInBackground(normalizedUser, epoch);
+      refreshProfileInBackground(normalizedUser, epoch, { force: true });
     } catch (_) {}
   };
 
@@ -249,6 +269,7 @@ export const AuthProvider = ({ children }) => {
     setAuthToken(null);
     setUser(null);
     setToken(null);
+    tokenRef.current = null;
     setLogoutVersion((value) => value + 1);
     try {
       await Storage.setItem(FORCE_LOGOUT_KEY, 'true');
@@ -258,9 +279,28 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const refreshProfile = async () => {
+  const refreshProfile = useCallback(async (options = {}) => {
     if (!token) return;
-    return refreshProfileInBackground(user, authEpochRef.current);
+    const epoch = authEpochRef.current;
+    if (profileRequestRef.current?.epoch === epoch) return profileRequestRef.current.promise;
+    if (!options.force && Date.now() - lastProfileRefreshRef.current < 30000) return userRef.current;
+    const promise = refreshProfileInBackground(userRef.current, epoch, options);
+    profileRequestRef.current = { epoch, promise };
+    try { return await promise; }
+    finally { if (profileRequestRef.current?.promise === promise) profileRequestRef.current = null; }
+  }, [token, refreshProfileInBackground]);
+
+  useEffect(() => {
+    const listener = AppState.addEventListener('change', (state) => {
+      if (state === 'active') refreshProfile();
+    });
+    return () => listener.remove();
+  }, [refreshProfile]);
+
+  const saveProfileChanges = async (changes) => {
+    const local = await queueProfileUpdate(userRef.current, changes);
+    await login(local, tokenRef.current);
+    return local;
   };
 
   const markOnboardingDone = async () => {
@@ -272,7 +312,7 @@ export const AuthProvider = ({ children }) => {
     <AuthContext.Provider value={{
       user, token, authLoading, onboardingDone,
       logoutVersion,
-      login, loginWithToken, register, checkMobile, logout, markOnboardingDone, refreshProfile,
+      login, loginWithToken, register, checkMobile, logout, markOnboardingDone, refreshProfile, saveProfileChanges,
     }}>
       {children}
     </AuthContext.Provider>

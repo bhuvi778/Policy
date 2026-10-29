@@ -8,6 +8,8 @@ project.ext.vectoricons = [
 apply from: "../../node_modules/react-native-vector-icons/fonts.gradle"
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
+def policyBhandarApplicationId = project.findProperty('POLICYBHANDAR_APPLICATION_ID') ?: 'com.policybhandar'
+def policyBhandarQaSigning = (project.findProperty('POLICYBHANDAR_QA_SIGNING') ?: 'false').toBoolean()
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -94,16 +96,17 @@ android {
 
     namespace 'com.policybhandar'
     defaultConfig {
-        applicationId findProperty('POLICYBHANDAR_APPLICATION_ID') ?: 'com.policybhandar'
+        applicationId policyBhandarApplicationId
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 41
-        versionName "1.0.40"
+        versionCode 47
+        versionName "1.0.46"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
         externalNativeBuild {
             cmake {
-                arguments "-DCMAKE_OBJECT_PATH_MAX=128"
+                arguments "-DCMAKE_OBJECT_PATH_MAX=250"
             }
         }
     }
@@ -131,12 +134,26 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            signingConfig signingConfigs.release
+            if (policyBhandarQaSigning) {
+                if (!policyBhandarApplicationId.endsWith('.qa')) {
+                    throw new GradleException('QA signing requires a separate .qa application ID.')
+                }
+                signingConfig signingConfigs.debug
+            } else {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled enableMinifyInReleaseBuilds
             shrinkResources enableMinifyInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+            if (policyBhandarQaSigning) {
+                // Instrumentation calls must survive optimizations in the separately built target APK.
+                proguardFile "qa-test-proguard-rules.pro"
+            }
             crunchPngs false
         }
+    }
+    if (policyBhandarQaSigning) {
+        testBuildType 'release'
     }
     packagingOptions {
         jniLibs {
@@ -175,6 +192,11 @@ dependencies {
     implementation("androidx.core:core:1.13.1")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("androidx.media3:media3-transformer:1.8.0")
+    implementation("androidx.media3:media3-effect:1.8.0")
+    implementation("com.google.zxing:core:3.5.3")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

@@ -59,7 +59,10 @@ const ContactUsScreen = ({ navigation }) => {
   const franchise = getAssignedFranchise(user);
 
   useEffect(() => {
-    loadAppSettings().then(setSettings);
+    let active = true;
+    const show = (next) => { if (active) setSettings(next); };
+    loadAppSettings({ onUpdate: show }).then(show);
+    return () => { active = false; };
   }, []);
 
   const call = (phone) => phone && Linking.openURL(`tel:${phone}`);

@@ -56,7 +56,9 @@ const PrivacyPolicyScreen = ({ navigation }) => {
 
   useEffect(() => {
     let active = true;
-    loadAppSettings()
+    loadAppSettings({ onUpdate: (data) => {
+      if (active) { setSettings(data); setLoading(false); }
+    } })
       .then((data) => {
         if (active) setSettings(data);
       })

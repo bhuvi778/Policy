@@ -17,6 +17,7 @@ import {
 } from '../services/api';
 import { buildRegistrationTempPassword } from '../services/authPassword';
 import { saveRegistrationPassword } from '../services/localCredentials';
+import { getDefaultMaterialServiceTree } from '../services/materialServiceTree';
 
 const PROFILE_FALLBACKS = [
   { id: 'agent', name: 'Agent' },
@@ -156,19 +157,19 @@ const RegisterScreen = ({ navigation, route }) => {
   const [confirmPasswordVisible, setConfirmPasswordVisible] = useState(false);
   const [loading,     setLoading]     = useState(false);
   const [dropOpen,    setDropOpen]    = useState(false);
-  const [profileOptions, setProfileOptions] = useState(PROFILE_FALLBACKS);
+  const [profileOptions, setProfileOptions] = useState(() => buildProfileOptions(
+    getDefaultMaterialServiceTree().map((group) => group.category),
+  ));
   const [profileLoading, setProfileLoading] = useState(false);
 
   useEffect(() => {
     let mounted = true;
     setProfileLoading(true);
-    getMaterialCategories({ timeout: 10000 })
+    getMaterialCategories({ timeout: 9000, token: null })
       .then((res) => {
         if (mounted) setProfileOptions(buildProfileOptions(res.data));
       })
-      .catch(() => {
-        if (mounted) setProfileOptions(PROFILE_FALLBACKS);
-      })
+      .catch(() => {})
       .finally(() => {
         if (mounted) setProfileLoading(false);
       });

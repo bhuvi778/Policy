@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   StatusBar, Dimensions, ActivityIndicator, Alert,
@@ -37,6 +37,8 @@ const SECTION_DATA = {
 const MenuSectionScreen = ({ route, navigation }) => {
   const insets = useSafeAreaInsets();
   const { user = {} } = useAuth() || {};
+  const userRef = useRef(user);
+  userRef.current = user;
   const {
     sectionId,
     title: routeTitle,
@@ -66,20 +68,22 @@ const MenuSectionScreen = ({ route, navigation }) => {
     let active = true;
     setLoading(true);
     loadMenuSection(sectionId, fallbackInfo.title, {}, {
-      user,
+      user: userRef.current,
       profileRole,
       categoryId,
       subcategoryId,
       serviceCategoryName,
       serviceSubcategoryName,
+      onCached: (cached) => { if (active) { setSectionInfo(cached); setLoading(false); } },
+      onPartial: (partial) => { if (active) { setSectionInfo(partial); setLoading(false); } },
       })
       .then((nextInfo) => {
         if (active) {
-          setSectionInfo(nextInfo || { ...fallbackInfo, data: [] });
+          setSectionInfo((current) => nextInfo?.data?.length || !current.data?.length ? (nextInfo || { ...fallbackInfo, data: [] }) : current);
         }
       })
       .catch(() => {
-        if (active) setSectionInfo(fallbackInfo);
+        if (active) setSectionInfo((current) => current.data?.length ? current : { ...fallbackInfo, source: 'unavailable' });
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -88,7 +92,7 @@ const MenuSectionScreen = ({ route, navigation }) => {
     return () => {
       active = false;
     };
-  }, [categoryId, fallbackInfo, navigation, profileRole, sectionId, serviceCategoryName, serviceSubcategoryName, subcategoryId, user]);
+  }, [categoryId, fallbackInfo, navigation, profileRole, sectionId, serviceCategoryName, serviceSubcategoryName, subcategoryId]);
 
   if (sectionId === 'prospect') return null;
 
@@ -184,7 +188,7 @@ const MenuSectionScreen = ({ route, navigation }) => {
         ) : null}
         ListEmptyComponent={!loading ? (
           <View style={styles.emptyListWrap}>
-            <Text style={styles.emptyListText}>No templates available in this section yet.</Text>
+            <Text style={styles.emptyListText}>{sectionInfo.source === 'unavailable' ? 'The content server is not responding. Please reopen this section in a moment.' : 'No templates available in this section yet.'}</Text>
           </View>
         ) : null}
       />

@@ -7,8 +7,7 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
-import { getMaterials } from '../services/api';
-import { normalizeMaterialsForUser } from '../services/contentMapper';
+import { getUserProfileRole, searchMaterialContent } from '../services/contentMapper';
 import { isDocumentItem, isMediaItem } from '../utils/material';
 import RecipientSheet from '../components/RecipientSheet';
 import { downloadTemplateToDevice } from '../services/downloads';
@@ -48,6 +47,9 @@ const matches = (item, query) => {
 const SearchScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
   const { user = {} } = useAuth() || {};
+  const userRef = useRef(user);
+  userRef.current = user;
+  const profileRole = getUserProfileRole(user);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -72,15 +74,14 @@ const SearchScreen = ({ navigation }) => {
         .map((item) => ({ ...item, kind: 'app' }));
 
       try {
-        const response = await getMaterials({ tag: trimmed, page: 1, limit: 20 });
-        let materials = await normalizeMaterialsForUser(response.data, 'Materials', user);
-
-        if (!materials.length) {
-          const fallback = await getMaterials({ page: 1, limit: 60 });
-          materials = (await normalizeMaterialsForUser(fallback.data, 'Materials', user))
-            .filter((item) => matches(item, trimmed));
-        }
-
+        const materials = await searchMaterialContent(trimmed, {
+          user: userRef.current,
+          onCached: (items) => {
+            if (!active) return;
+            setResults([...appMatches, ...items.map((item) => ({ ...item, kind: 'material' }))]);
+            if (items.length || appMatches.length) setLoading(false);
+          },
+        });
         const materialMatches = materials.map((item) => ({ ...item, kind: 'material' }));
         if (active) setResults([...appMatches, ...materialMatches]);
       } catch (err) {
@@ -97,7 +98,7 @@ const SearchScreen = ({ navigation }) => {
       active = false;
       clearTimeout(timer);
     };
-  }, [query, user]);
+  }, [query, profileRole]);
 
   const handleSearch = (text) => {
     setQuery(text);
