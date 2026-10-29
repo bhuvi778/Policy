@@ -2411,7 +2411,7 @@ SPEC CHECKSUMS:
   React: e2dc35338068bbd299c66f043ae0d7f25de8499e
   React-callinvoker: 28b25d21b124c26cebaea713ba7d801b9351dc48
   React-Core: 02ed7d2ffb70437bdf2aba074a13078a7b0b9ff0
-  React-Core-prebuilt: 584721a3c7b19f28556fdf3ba378afc6f968aeb6
+  React-Core-prebuilt: 45181a7ffc968eb8bf891e491168e790cc6e8dd4
   React-CoreModules: b3a5a42dadcde3b5d47b325bd912eb2ced89e146
   React-cxxreact: fe8f88dda044e5905e99a00f41b7a874c3908716
   React-debug: 92944dc4d89f56d640e75498266cbde557a48189
@@ -2475,7 +2475,7 @@ SPEC CHECKSUMS:
   ReactAppDependencyProvider: 25c9c516839be2c5e3d3344f95dc7da5f7e63fc2
   ReactCodegen: c8f81e6c6f762dcf442a6203a1fb58f7dafc8014
   ReactCommon: 7dfc3250793bf36cf221096ff59e1179e13eef7f
-  ReactNativeDependencies: 23d479a523a66e7fc6f76c8a7657dfc6971a46f0
+  ReactNativeDependencies: 71e9a792aad95292ab165cefa8e979b84effec2a
   RNGestureHandler: ed28fea435eee1ea629ed8372c2e98138a73a472
   RNReanimated: 56d68c745cfbb80187b7d78caa72a738901294ee
   RNScreens: 991cc417cd396602a6cf59a42139e5a9d91462a9
