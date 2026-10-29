@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, Animated, Image,
-  Dimensions, Pressable,
+  Dimensions, Pressable, Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
@@ -20,7 +20,7 @@ const NAV_ITEMS = [
   { id: 'training', icon: 'school', label: 'Training' },
   { id: 'about', icon: 'person', label: 'About US' },
   { id: 'contact', icon: 'phone', label: 'Contact Us' },
-  { id: 'rate', icon: 'star-border', label: 'Rate Us' },
+  ...(Platform.OS === 'android' ? [{ id: 'rate', icon: 'star-border', label: 'Rate Us' }] : []),
   { id: 'terms', icon: 'description', label: 'Terms Of Use' },
   { id: 'privacy', icon: 'info-outline', label: 'Privacy & Policy' },
   { id: 'exit', icon: 'logout', label: 'Logout' },

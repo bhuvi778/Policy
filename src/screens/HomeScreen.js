@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { View, ScrollView, FlatList, StyleSheet, Alert, ActivityIndicator, Text, Modal, Pressable, TouchableOpacity, Image, InteractionManager, AppState } from 'react-native';
+import { View, ScrollView, FlatList, StyleSheet, Alert, ActivityIndicator, Text, Modal, Pressable, TouchableOpacity, Image, InteractionManager, AppState, Platform } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Header from '../components/Header';
 import BannerCarousel from '../components/BannerCarousel';
@@ -652,6 +652,7 @@ const HomeScreen = ({ navigation }) => {
   }, [handleViewAll]);
 
   const handleDrawerNavigate = useCallback((id) => {
+    if (id === 'rate' && Platform.OS !== 'android') return;
     setActiveNav(id);
     setDrawerOpen(false);
     setMenuOpen(false);
