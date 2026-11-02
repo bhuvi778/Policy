@@ -1,3 +1,6 @@
+import { extractUserData } from '../utils/extractUserData';
+export { extractUserData } from '../utils/extractUserData';
+import { MEMBERSHIP_KEYS } from '../utils/subscriptionInfo';
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { getProfileImageUrl } from '../utils/profileAssets';
 import { normalizeProfileFields } from '../utils/profileFields';
@@ -21,8 +24,6 @@ const LEGACY_AUTH_KEYS = [
 ];
 const LOGOUT_KEYS = [USER_KEY, TOKEN_KEY, ...LEGACY_AUTH_KEYS];
 
-const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
-
 const isDisplayName = (value = '') => {
   const text = String(value || '').trim();
   const lower = text.toLowerCase();
@@ -33,52 +34,15 @@ const isDisplayName = (value = '') => {
   );
 };
 
-export const extractUserData = (payload) => {
-  if (!isObject(payload)) return null;
-
-  if (
-    payload.name ||
-    payload.fullName ||
-    payload.full_name ||
-    payload.mobile ||
-    payload.email ||
-    payload.designation ||
-    payload.activePlan ||
-    payload.planId ||
-    payload.subscription ||
-    payload.currentPlan ||
-    payload.profileImage ||
-    payload.profileImageUrl ||
-    payload.profilePhoto ||
-    payload.profilePhotoUrl ||
-    payload.profilePicture ||
-    payload.profilePictureUrl ||
-    payload.profilePic ||
-    payload.profile_pic ||
-    payload.avatar ||
-    payload.avatarUrl ||
-    payload.photo ||
-    payload.photoUrl ||
-    payload.image ||
-    payload.imageUrl
-  ) {
-    return payload;
-  }
-
-  for (const nested of [payload.user, payload.profile, payload.advisor, payload.employee,
-    payload.customer, payload.member, payload.account, payload.success, payload.data]) {
-    const extracted = extractUserData(nested);
-    if (extracted) return extracted;
-  }
-
-  return null;
-};
-
 export const mergeUserData = (previous, next) => {
   if (!previous) return next;
   if (!next) return previous;
 
   const merged = { ...previous, ...next, ...(previous._pendingProfilePatch || {}) };
+  if (MEMBERSHIP_KEYS.some(key => Object.prototype.hasOwnProperty.call(next, key))) {
+    MEMBERSHIP_KEYS.forEach(key => { delete merged[key]; });
+    MEMBERSHIP_KEYS.forEach(key => { if (Object.prototype.hasOwnProperty.call(next, key)) merged[key] = next[key]; });
+  }
   const freshImage = getProfileImageUrl(next);
   const keepPreviousWhenNextIsBlank = [
     'name',
@@ -107,7 +71,7 @@ export const mergeUserData = (previous, next) => {
   ];
 
   keepPreviousWhenNextIsBlank.forEach((key) => {
-    if (!String(next[key] || '').trim() && previous[key]) {
+    if (!Object.prototype.hasOwnProperty.call(previous._pendingProfilePatch || {}, key) && !String(next[key] || '').trim() && previous[key]) {
       merged[key] = previous[key];
     }
   });
@@ -137,6 +101,7 @@ export const AuthProvider = ({ children }) => {
   tokenRef.current = token;
   userRef.current = user;
   const profileRequestRef = useRef(null);
+  const profileReadVersionRef = useRef(0);
   const lastProfileRefreshRef = useRef(0);
 
   useEffect(() => {
@@ -144,24 +109,28 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const refreshProfileInBackground = useCallback(async (previousUser = null, epoch = authEpochRef.current, options = {}) => {
+    const readVersion = ++profileReadVersionRef.current;
+    const isCurrentRead = () => epoch === authEpochRef.current && readVersion === profileReadVersionRef.current;
     try {
-      const queued = previousUser ? await syncQueuedProfile(previousUser, {
-        token: tokenRef.current, extractUser: extractUserData, isCurrent: () => epoch === authEpochRef.current, force: !!options.force,
-      }) : null;
-      if (epoch !== authEpochRef.current) return;
+      const requestToken = tokenRef.current;
+      const queued = previousUser && !options.membershipOnly ? await syncQueuedProfile(previousUser, {
+        token: requestToken, extractUser: extractUserData, isCurrent: () => epoch === authEpochRef.current, force: !!options.force,
+      }).catch(() => null) : null;
+      if (!isCurrentRead()) return null;
       if (queued?.user) {
         setUser(queued.user);
         userRef.current = queued.user;
         await Storage.setItem(USER_KEY, JSON.stringify(queued.user));
-        return queued.user;
       }
-      const profileRes = await getProfile({ timeout: 6000 });
-      if (epoch !== authEpochRef.current) return;
+      // A pending edit must not prevent reading an admin's latest membership assignment.
+      const profileRes = await getProfile({ token: requestToken, cache: false, timeout: 8000 });
+      if (!isCurrentRead()) return null;
       const userData = extractUserData(profileRes.data);
       if (userData) {
-        const mergedUser = mergeUserData(previousUser, userData);
-        if (epoch !== authEpochRef.current) return;
+        const mergedUser = mergeUserData(userRef.current || queued?.user || previousUser, userData);
+        if (!isCurrentRead()) return null;
         setUser((current) => JSON.stringify(current) === JSON.stringify(mergedUser) ? current : mergedUser);
+        userRef.current = mergedUser;
         lastProfileRefreshRef.current = Date.now();
         await Storage.setItem(USER_KEY, JSON.stringify(mergedUser));
         return mergedUser;
@@ -282,7 +251,14 @@ export const AuthProvider = ({ children }) => {
   const refreshProfile = useCallback(async (options = {}) => {
     if (!token) return;
     const epoch = authEpochRef.current;
-    if (profileRequestRef.current?.epoch === epoch) return profileRequestRef.current.promise;
+    const inflight = profileRequestRef.current;
+    if (inflight?.epoch === epoch) {
+      if (!options.force) return inflight.promise;
+      // A read started before payment/activation is not a fresh confirmation.
+      await inflight.promise.catch(() => null);
+      if (epoch !== authEpochRef.current) return null;
+      if (profileRequestRef.current && profileRequestRef.current !== inflight) return profileRequestRef.current.promise;
+    }
     if (!options.force && Date.now() - lastProfileRefreshRef.current < 30000) return userRef.current;
     const promise = refreshProfileInBackground(userRef.current, epoch, options);
     profileRequestRef.current = { epoch, promise };
@@ -292,7 +268,7 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     const listener = AppState.addEventListener('change', (state) => {
-      if (state === 'active') refreshProfile();
+      if (state === 'active') refreshProfile({ force: true, membershipOnly: true });
     });
     return () => listener.remove();
   }, [refreshProfile]);

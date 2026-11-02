@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -15,12 +15,14 @@ import {
   RefreshControl,
   Platform,
   TextInput,
+  AppState,
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
 import { BRAND, getSubscriptionInfo } from '../services/appData';
+import { getCheckoutDetails } from '../services/paymentCheckout';
 import { getUserProfileRole, normalizeProfileRole } from '../services/contentMapper';
 import {
   createPaymentOrder,
@@ -221,22 +223,6 @@ const calculateAddonsTotal = (categoryOptions = [], selectedAddonIds = []) =>
     return total + (option?.addonPrice || 1499);
   }, 0);
 
-const findPaymentUrl = (payload) => {
-  const values = [
-    payload?.paymentUrl,
-    payload?.paymentLink,
-    payload?.short_url,
-    payload?.url,
-    payload?.data?.paymentUrl,
-    payload?.data?.paymentLink,
-    payload?.data?.short_url,
-    payload?.data?.url,
-    payload?.subscription?.short_url,
-    payload?.data?.subscription?.short_url,
-  ];
-  return values.find((value) => typeof value === 'string' && value.startsWith('http'));
-};
-
 const StatPill = ({ icon, label, value, color }) => (
   <View style={styles.statPill}>
     <MaterialIcons name={icon} size={18} color={color} />
@@ -310,6 +296,7 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
   const profileRole = getUserProfileRole(user || {});
   const fromRegistration = !!route?.params?.fromRegistration;
   const subscription = getSubscriptionInfo(user);
+  const waitingForActivation = useRef(!subscription.active);
   const [plans, setPlans] = useState([]);
   const [selectedPlanId, setSelectedPlanId] = useState('');
   const [loading, setLoading] = useState(true);
@@ -332,9 +319,12 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
   );
 
   const continueForActiveProfile = useCallback((profile = user) => {
-    if (!fromRegistration) return false;
+    if (navigation.isFocused?.() === false) return false;
+    if (!fromRegistration && !waitingForActivation.current) return false;
     if (!getSubscriptionInfo(profile).active) return false;
-    navigation.replace('Onboarding');
+    waitingForActivation.current = false;
+    if (fromRegistration) navigation.replace('Onboarding');
+    else navigation.reset({ index: 0, routes: [{ name: 'Home' }] });
     return true;
   }, [fromRegistration, navigation, user]);
 
@@ -383,7 +373,7 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
 
   useEffect(() => {
     const unsubscribe = navigation.addListener?.('focus', () => {
-      refreshProfile?.()
+      refreshProfile?.({ force: true, membershipOnly: true })
         .then((freshProfile) => {
           continueForActiveProfile(freshProfile || user);
         })
@@ -393,12 +383,29 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
   }, [continueForActiveProfile, navigation, refreshProfile, user]);
 
   useEffect(() => {
+    if (subscription.active) return;
+    let busy = false;
+    const check = async () => {
+      if (busy || processing || checkoutVisible || AppState.currentState !== 'active' || navigation.isFocused?.() === false) return;
+      busy = true;
+      try {
+        const freshProfile = await refreshProfile?.({ force: true, membershipOnly: true });
+        if (navigation.isFocused?.() !== false && freshProfile) continueForActiveProfile(freshProfile);
+      } catch (_) {} finally { busy = false; }
+    };
+    check();
+    const timer = setInterval(check, 15000);
+    const listener = AppState.addEventListener('change', state => { if (state === 'active') check(); });
+    return () => { clearInterval(timer); listener.remove(); };
+  }, [checkoutVisible, continueForActiveProfile, navigation, processing, refreshProfile, subscription.active]);
+
+  useEffect(() => {
     continueForActiveProfile(user);
   }, [continueForActiveProfile, user]);
 
   const refreshMembership = async () => {
     loadPlans(true);
-    const freshProfile = await refreshProfile?.().catch(() => null);
+    const freshProfile = await refreshProfile?.({ force: true, membershipOnly: true }).catch(() => null);
     continueForActiveProfile(freshProfile || user);
   };
 
@@ -583,6 +590,7 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
       ];
       const body = {
         planId: getPlanId(selectedPlan),
+        selectedCategories: selectedCategoryIds,
         addons: selectedAddons,
         selectedAddons,
         extraOptions: selectedAddons,
@@ -591,27 +599,16 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
       const res = mode === 'trial'
         ? await createPaymentSubscription(body)
         : await createPaymentOrder(body);
-      const paymentUrl = findPaymentUrl(res.data);
-      const checkoutData = res?.data?.data || {};
-      const razorpayKey = res?.data?.key || res?.data?.data?.key || res?.data?.razorpayKey || '';
-
-      if (paymentUrl) {
-        setCheckoutVisible(false);
-        navigation.navigate('PaymentWebView', {
-          url: paymentUrl,
-          title: toTitleCase(selectedPlan?.name || 'Membership Payment'),
-        });
-        return;
-      }
-
-      if (razorpayKey && (checkoutData.id || checkoutData.subscription_id)) {
+      const details = getCheckoutDetails(res.data, mode);
+      if (details.nativeReady) {
         setCheckoutVisible(false);
         navigation.navigate('PaymentWebView', {
           title: mode === 'trial' ? '15 Days Free Trial' : toTitleCase(selectedPlan?.name || 'Membership Payment'),
+          fromRegistration,
           checkout: {
             mode,
-            key: razorpayKey,
-            data: checkoutData,
+            key: details.key,
+            data: details.data,
             planId: getPlanId(selectedPlan),
             planName: selectedPlan.name,
             selectedCategories: selectedCategoryIds,
@@ -627,14 +624,21 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
         return;
       }
 
-      Alert.alert(
-        'Plan request created',
-        'Your membership request has been sent. Please complete activation before continuing.'
-      );
+      if (details.url) {
+        setCheckoutVisible(false);
+        navigation.navigate('PaymentWebView', {
+          url: details.url,
+          fromRegistration,
+          title: toTitleCase(selectedPlan?.name || 'Membership Payment'),
+        });
+        return;
+      }
+
+      throw new Error('The server did not return a valid Razorpay order or secure payment link.');
     } catch (err) {
       Alert.alert(
         'Payment link unavailable',
-        'Online checkout is not available right now. You can send the selected plan request on WhatsApp.',
+        `${err?.data?.error || err?.message || 'Online checkout is not available right now.'} You can contact support for activation.`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'WhatsApp', onPress: () => openWhatsApp(selectedPlan) },

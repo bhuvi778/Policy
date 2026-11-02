@@ -12,3 +12,11 @@
 -keep class com.facebook.react.turbomodule.** { *; }
 
 # Add any project specific keep options here:
+
+# Razorpay calls the payment listeners from its native checkout activity.
+-keepattributes *Annotation*
+-dontwarn com.razorpay.**
+-keep class com.razorpay.** { *; }
+-keepclasseswithmembers class * {
+    public void onPayment*(...);
+}

@@ -1,13 +1,5 @@
-import React, { useCallback, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, AppState, Linking, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,281 +7,209 @@ import { Colors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
 import { getSubscriptionInfo } from '../services/appData';
 import { verifyPaymentOrder, verifyPaymentSubscription } from '../services/api';
-
-const isSuccessUrl = (url = '') => {
-  const value = String(url || '').toLowerCase();
-  return (
-    value.includes('razorpay_payment_id') ||
-    value.includes('payment_id=') ||
-    value.includes('paymentid=') ||
-    value.includes('status=success') ||
-    value.includes('payment=success') ||
-    value.includes('/success')
-  );
-};
-
-const isFailureUrl = (url = '') => {
-  const value = String(url || '').toLowerCase();
-  return (
-    value.includes('status=failed') ||
-    value.includes('status=cancel') ||
-    value.includes('payment=failed') ||
-    value.includes('payment=cancel') ||
-    value.includes('/failed') ||
-    value.includes('/cancel')
-  );
-};
-
-const safeJson = (value) => JSON.stringify(value || {}).replace(/<\/script/gi, '<\\/script');
-
-const buildRazorpayHtml = (checkout = {}) => {
-  const mode = checkout.mode === 'trial' ? 'trial' : 'direct';
-  const data = checkout.data || {};
-  const user = checkout.user || {};
-  const options = {
-    key: checkout.key,
-    amount: mode === 'direct' ? data.amount : undefined,
-    currency: data.currency || 'INR',
-    name: 'Policybhandar',
-    description: mode === 'trial'
-      ? `${checkout.planName || 'Membership'} - 15 Days Free Trial`
-      : `${checkout.planName || 'Membership'} - Buy Now`,
-    order_id: mode === 'direct' ? data.id : undefined,
-    subscription_id: mode === 'trial' ? data.id : undefined,
-    prefill: {
-      name: user.name || '',
-      email: user.email || '',
-      contact: user.mobile || '9999999999',
-    },
-    theme: { color: '#C7332D' },
-  };
-
-  return `
-<!doctype html>
-<html>
-  <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      html, body { margin: 0; height: 100%; font-family: Arial, sans-serif; background: #fff7f5; }
-      .wrap { height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: #222; }
-      .box { background: white; border-radius: 16px; padding: 24px; box-shadow: 0 12px 32px rgba(0,0,0,.12); max-width: 360px; width: 100%; }
-      .spin { width: 34px; height: 34px; border: 4px solid #f0c8c4; border-top-color: #C7332D; border-radius: 50%; margin: 0 auto 16px; animation: spin 1s linear infinite; }
-      @keyframes spin { to { transform: rotate(360deg); } }
-      h1 { font-size: 18px; margin: 0 0 8px; }
-      p { color: #666; font-size: 13px; line-height: 18px; margin: 0; }
-      button { margin-top: 18px; border: 0; background: #C7332D; color: #fff; border-radius: 10px; padding: 12px 16px; font-weight: 800; }
-    </style>
-  </head>
-  <body>
-    <div class="wrap">
-      <div class="box">
-        <div class="spin"></div>
-        <h1>Opening secure Razorpay checkout</h1>
-        <p>Please wait. Do not press back while payment is loading.</p>
-        <button id="retry" style="display:none">Retry Payment</button>
-      </div>
-    </div>
-    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-    <script>
-      const checkoutOptions = ${safeJson(options)};
-      function post(payload) {
-        window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify(payload));
-      }
-      function openCheckout() {
-        if (!window.Razorpay) {
-          document.getElementById('retry').style.display = 'inline-block';
-          post({ type: 'error', message: 'Razorpay checkout failed to load.' });
-          return;
-        }
-        const options = {
-          ...checkoutOptions,
-          handler: function(response) { post({ type: 'success', response }); },
-          modal: {
-            ondismiss: function() { post({ type: 'closed' }); }
-          }
-        };
-        const instance = new window.Razorpay(options);
-        instance.on('payment.failed', function(response) {
-          post({ type: 'failed', response });
-        });
-        instance.open();
-      }
-      document.getElementById('retry').onclick = openCheckout;
-      setTimeout(openCheckout, 400);
-    </script>
-  </body>
-</html>`;
-};
+import { buildPaymentVerification, buildRazorpayOptions, isHttpsPaymentUrl, isStoreUrl, paymentReturnState, waitForMembership } from '../services/paymentCheckout';
 
 const PaymentWebViewScreen = ({ navigation, route }) => {
   const insets = useSafeAreaInsets();
+  const { refreshProfile, token } = useAuth();
   const webRef = useRef(null);
-  const { refreshProfile, user } = useAuth();
+  const alive = useRef(true);
+  const session = useRef(token);
+  const currentToken = useRef(token);
+  currentToken.current = token;
+  const busy = useRef(false);
+  const started = useRef(false);
+  const finished = useRef(false);
+  const receipt = useRef(null);
+  const verified = useRef(false);
+  const externalPayment = useRef(false);
   const [loading, setLoading] = useState(true);
-  const [handled, setHandled] = useState(false);
+  const [phase, setPhase] = useState('opening');
+  const [message, setMessage] = useState('Opening secure Razorpay checkout...');
+  const checkout = route?.params?.checkout || null;
   const url = route?.params?.url || '';
   const title = route?.params?.title || 'Payment';
-  const checkout = route?.params?.checkout || null;
+  const fromRegistration = !!route?.params?.fromRegistration;
+  const isCurrent = useCallback(() => alive.current && session.current === currentToken.current, []);
 
-  const finishPayment = useCallback(async () => {
-    if (handled) return;
-    setHandled(true);
-    const freshProfile = await refreshProfile?.().catch(() => null);
-    const active = getSubscriptionInfo(freshProfile || user || {}).active;
-    Alert.alert(
-      active ? 'Payment completed' : 'Payment submitted',
-      active
-        ? 'Your membership is active now.'
-        : 'Payment is submitted. Your access will update after backend confirmation.',
-      [
-        {
-          text: 'OK',
-          onPress: () => navigation.reset({
-            index: 0,
-            routes: [{ name: active ? 'Home' : 'Subscription' }],
-          }),
-        },
-      ],
-    );
-  }, [handled, navigation, refreshProfile, user]);
+  useEffect(() => () => { alive.current = false; }, []);
 
-  const verifyRazorpayPayment = useCallback(async (response = {}) => {
-    if (!checkout || handled) return;
-    setHandled(true);
+  const returnToApp = useCallback((active) => {
+    if (!isCurrent()) return;
+    navigation.reset({ index: 0, routes: [{ name: active ? (fromRegistration ? 'Onboarding' : 'Home') : 'Subscription' }] });
+  }, [fromRegistration, isCurrent, navigation]);
+
+  const checkMembership = useCallback(async () => {
+    const fresh = await waitForMembership(refreshProfile, profile => getSubscriptionInfo(profile).active, { isCurrent });
+    if (!isCurrent()) return;
+    const active = !!fresh && getSubscriptionInfo(fresh).active;
+    setLoading(false);
+    if (active) {
+      finished.current = true;
+      setPhase('active');
+      setMessage('Your membership is active.');
+      Alert.alert('Membership active', 'Your plan is active. You can continue in the app.', [
+        { text: 'Continue', onPress: () => returnToApp(true) },
+      ]);
+    } else {
+      setPhase('pending');
+      setMessage(verified.current
+        ? 'Payment verified. Waiting for the server to activate your plan. Do not pay again; check status shortly.'
+        : 'The server has not confirmed an active plan yet. If money was deducted, do not pay again; check status or contact support.');
+    }
+  }, [isCurrent, refreshProfile, returnToApp]);
+
+  const verifyReceipt = useCallback(async (response) => {
+    if (!checkout || busy.current || finished.current || !isCurrent()) return;
+    busy.current = true;
+    receipt.current = response;
     setLoading(true);
+    setPhase('verifying');
+    setMessage('Verifying payment with the server...');
     try {
-      const common = {
-        planId: checkout.planId,
-        selectedCategories: checkout.selectedCategories || [],
-        selectedAddons: checkout.selectedAddons || [],
-        couponCode: checkout.couponCode || undefined,
-      };
-      if (checkout.mode === 'trial') {
-        await verifyPaymentSubscription({
-          ...common,
-          razorpay_payment_id: response.razorpay_payment_id,
-          razorpay_subscription_id: response.razorpay_subscription_id,
-          razorpay_signature: response.razorpay_signature,
-        });
-      } else {
-        await verifyPaymentOrder({
-          ...common,
-          razorpay_payment_id: response.razorpay_payment_id,
-          razorpay_order_id: response.razorpay_order_id,
-          razorpay_signature: response.razorpay_signature,
-        });
+      const body = buildPaymentVerification(checkout, response);
+      if (checkout.mode === 'trial') await verifyPaymentSubscription(body);
+      else await verifyPaymentOrder(body);
+      verified.current = true;
+      await checkMembership();
+    } catch (error) {
+      if (isCurrent()) {
+        setPhase('pending');
+        setLoading(false);
+        setMessage('Payment confirmation is pending. Do not pay again if money was deducted. Check status to retry verification.');
+        Alert.alert('Confirmation pending', error?.data?.error || error?.message || 'Unable to verify payment. Please check status or contact support.');
       }
-      const freshProfile = await refreshProfile?.().catch(() => null);
-      const active = getSubscriptionInfo(freshProfile || user || {}).active;
-      Alert.alert(
-        checkout.mode === 'trial' ? 'Free trial started' : 'Payment successful',
-        checkout.mode === 'trial'
-          ? 'Autopay is active and your 15 days free trial has started.'
-          : 'Your plan has been activated.',
-        [{
-          text: 'OK',
-          onPress: () => navigation.reset({
-            index: 0,
-            routes: [{ name: active ? 'Home' : 'Subscription' }],
-          }),
-        }],
-      );
-    } catch (err) {
-      setHandled(false);
-      Alert.alert('Payment verification failed', err?.data?.error || err?.data?.message || err?.message || 'Please contact support if amount was deducted.');
-    } finally {
-      setLoading(false);
-    }
-  }, [checkout, handled, navigation, refreshProfile, user]);
+    } finally { busy.current = false; }
+  }, [checkMembership, checkout, isCurrent]);
 
-  const handleMessage = useCallback((event) => {
-    let payload = null;
+  const openNativeCheckout = useCallback(async () => {
+    if (busy.current || !checkout || !isCurrent() || receipt.current) return;
+    setPhase('opening');
+    setLoading(true);
+    setMessage('Opening secure Razorpay checkout...');
+    busy.current = true;
     try {
-      payload = JSON.parse(event?.nativeEvent?.data || '{}');
-    } catch (_) {
-      payload = {};
+      // Load the official SDK only for an order/subscription created by our backend.
+      const RazorpayCheckout = require('react-native-razorpay').default;
+      const response = await RazorpayCheckout.open(buildRazorpayOptions(checkout));
+      busy.current = false;
+      if (isCurrent()) await verifyReceipt(response);
+    } catch (error) {
+      busy.current = false;
+      if (!isCurrent()) return;
+      setLoading(false);
+      setPhase('cancelled');
+      setMessage('Checkout did not complete. If money was deducted, check status before trying again.');
+      if (Number(error?.code) !== 0) Alert.alert('Payment not completed', error?.description || error?.message || 'Please retry Razorpay checkout or check your membership status.');
     }
-    if (payload?.type === 'success') {
-      verifyRazorpayPayment(payload.response || {});
-      return;
-    }
-    if (payload?.type === 'failed') {
-      const description = payload?.response?.error?.description || 'Please retry the payment.';
-      Alert.alert('Payment failed', description);
-      return;
-    }
-    if (payload?.type === 'error') {
-      Alert.alert('Payment error', payload.message || 'Unable to open Razorpay checkout.');
-    }
-  }, [verifyRazorpayPayment]);
+  }, [checkout, isCurrent, verifyReceipt]);
 
-  const handleNavChange = useCallback((navState) => {
-    const nextUrl = navState?.url || '';
-    if (!nextUrl) return;
-    if (isSuccessUrl(nextUrl)) {
-      finishPayment();
-      return;
-    }
-    if (isFailureUrl(nextUrl)) {
-      Alert.alert('Payment not completed', 'You can retry the payment or choose another plan.');
-    }
-  }, [finishPayment]);
+  useEffect(() => {
+    if (!checkout || started.current) return;
+    started.current = true;
+    openNativeCheckout();
+  }, [checkout, openNativeCheckout]);
 
-  const closePayment = useCallback(() => {
-    Alert.alert('Close payment?', 'Your payment may not be complete yet.', [
+  const refreshStatus = useCallback(async () => {
+    if (busy.current || finished.current || !isCurrent()) return;
+    if (receipt.current && !verified.current) {
+      await verifyReceipt(receipt.current);
+      if (verified.current || finished.current || !isCurrent()) return;
+      // A webhook may already have activated the plan even if the verify response was lost.
+    }
+    busy.current = true;
+    setLoading(true);
+    setPhase('verifying');
+    setMessage('Checking your membership status...');
+    try { await checkMembership(); }
+    finally { busy.current = false; }
+  }, [checkMembership, isCurrent, verifyReceipt]);
+
+  useEffect(() => {
+    const listener = AppState.addEventListener('change', state => {
+      if (state === 'active' && externalPayment.current) {
+        externalPayment.current = false;
+        refreshStatus();
+      }
+    });
+    return () => listener.remove();
+  }, [refreshStatus]);
+
+  const handleRequest = useCallback((request) => {
+    const next = request?.url || '';
+    if (!next || next === 'about:blank') return true;
+    if (isStoreUrl(next)) {
+      Alert.alert('Use Razorpay checkout', 'A store redirect was blocked. Return to checkout and choose an available payment method.');
+      return false;
+    }
+    if (next.startsWith('policybhandar://payment')) { refreshStatus(); return false; }
+    if (/^https?:\/\//i.test(next)) return true;
+    // Never forward an Android intent or its browser_fallback_url to the store.
+    let target = next;
+    if (next.startsWith('intent://')) {
+      const scheme = next.match(/;scheme=([a-z0-9.-]+);/i)?.[1];
+      target = scheme ? `${scheme}://${next.slice(9).split('#Intent;')[0]}` : '';
+    }
+    if (!/^(upi|phonepe|tez|gpay|paytmmp):\/\//i.test(target)) {
+      Alert.alert('Payment method unavailable', 'Please return to checkout and choose another payment method.');
+      return false;
+    }
+    Linking.canOpenURL(target).then(async supported => {
+      if (!isCurrent()) return;
+      if (!supported) throw new Error('The selected payment app is not installed. Choose another method in Razorpay.');
+      externalPayment.current = true;
+      await Linking.openURL(target);
+    }).catch(error => { if (isCurrent()) Alert.alert('Payment app unavailable', error?.message || 'Choose another payment method.'); });
+    return false;
+  }, [isCurrent, refreshStatus]);
+
+  const handleNavChange = useCallback(state => {
+    const result = paymentReturnState(state?.url);
+    if (result === 'returned') refreshStatus();
+    if (result === 'failed') {
+      setLoading(false);
+      setMessage('Payment did not complete. Check status if money was deducted.');
+    }
+  }, [refreshStatus]);
+
+  const closePayment = () => {
+    if (finished.current) return returnToApp(true);
+    Alert.alert('Close payment?', 'If money was deducted, check status before paying again.', [
       { text: 'Stay', style: 'cancel' },
-      { text: 'Close', style: 'destructive', onPress: () => navigation.goBack() },
+      { text: 'Close', onPress: () => returnToApp(false) },
     ]);
-  }, [navigation]);
+  };
 
-  if (!url && !checkout) {
-    return (
-      <View style={styles.emptyRoot}>
-        <Text style={styles.emptyTitle}>Payment link unavailable</Text>
-        <TouchableOpacity style={styles.emptyBtn} onPress={() => navigation.goBack()}>
-          <Text style={styles.emptyBtnText}>Back</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
+  const hosted = !checkout && isHttpsPaymentUrl(url);
   return (
     <View style={styles.root}>
       <StatusBar backgroundColor={Colors.primary} barStyle="light-content" />
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity style={styles.iconBtn} onPress={closePayment}>
-          <MaterialIcons name="close" size={24} color="#fff" />
-        </TouchableOpacity>
+        <TouchableOpacity style={styles.iconBtn} onPress={closePayment}><MaterialIcons name="close" size={24} color="#fff" /></TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{title}</Text>
-        <TouchableOpacity style={styles.iconBtn} onPress={() => webRef.current?.reload?.()}>
-          <MaterialIcons name="refresh" size={22} color="#fff" />
-        </TouchableOpacity>
+        <TouchableOpacity style={styles.iconBtn} onPress={refreshStatus}><MaterialIcons name="refresh" size={22} color="#fff" /></TouchableOpacity>
       </View>
-
-      {loading ? (
-        <View style={styles.loader}>
-          <ActivityIndicator color={Colors.primary} />
-          <Text style={styles.loaderText}>Opening secure payment...</Text>
-        </View>
-      ) : null}
-
-      <WebView
-        ref={webRef}
-        source={checkout ? { html: buildRazorpayHtml(checkout), baseUrl: 'https://policy-bhandar.vercel.app' } : { uri: url }}
-        style={styles.webview}
-        originWhitelist={['*']}
-        onLoadStart={() => setLoading(true)}
-        onLoadEnd={() => setLoading(false)}
-        onNavigationStateChange={checkout ? undefined : handleNavChange}
-        onMessage={handleMessage}
-        javaScriptEnabled
-        domStorageEnabled
-        startInLoadingState
-        onError={() => {
-          setLoading(false);
-          Alert.alert('Payment page error', 'Unable to load the payment page. Please retry.');
+      {hosted ? <WebView
+        ref={webRef} source={{ uri: url }} style={styles.webview} originWhitelist={['*']}
+        onShouldStartLoadWithRequest={handleRequest}
+        onOpenWindow={event => {
+          const next = event.nativeEvent?.targetUrl;
+          if (next && handleRequest({ url: next }) && /^https?:\/\//i.test(next)) webRef.current?.injectJavaScript(`window.location.href=${JSON.stringify(next)};true;`);
         }}
-      />
+        onNavigationStateChange={handleNavChange} javaScriptEnabled domStorageEnabled
+        onLoadEnd={() => setLoading(false)}
+        onError={() => { setLoading(false); setMessage('Payment page could not load. Check status if money was deducted.'); }}
+      /> : null}
+      {checkout || !hosted ? <View style={styles.emptyRoot}>
+        {loading ? <ActivityIndicator color={Colors.primary} /> : null}
+        <Text style={styles.emptyTitle}>{checkout ? message : 'Secure payment link unavailable. Return to plans and retry.'}</Text>
+        <TouchableOpacity style={styles.emptyBtn} disabled={loading} onPress={refreshStatus}><Text style={styles.emptyBtnText}>Check payment status</Text></TouchableOpacity>
+        {checkout && phase === 'cancelled' && !receipt.current ? <TouchableOpacity style={styles.emptyBtn} onPress={openNativeCheckout}><Text style={styles.emptyBtnText}>Retry Razorpay checkout</Text></TouchableOpacity> : null}
+      </View> : <View style={styles.loader}>
+        {loading ? <ActivityIndicator color={Colors.primary} /> : null}
+        <Text style={[styles.loaderText, { flex: 1 }]}>{message}</Text>
+        <TouchableOpacity disabled={loading} onPress={refreshStatus}><Text style={styles.loaderText}>Check status</Text></TouchableOpacity>
+      </View>}
     </View>
   );
 };
