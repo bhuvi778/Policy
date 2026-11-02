@@ -4,7 +4,7 @@ const map = JSON.parse(fs.readFileSync('android/app/build/intermediates/sourcema
 const files = [
   'App.js', 'src/utils/distribution.js',
   'src/screens/SubscriptionPlansScreen.js','src/screens/PaymentWebViewScreen.js',
-  'src/components/DrawerSidebar.js','src/components/SubscriptionModal.js','src/screens/SearchScreen.js','src/screens/MyProfileScreen.js',
+  'src/components/DrawerSidebar.js','src/screens/SearchScreen.js','src/screens/MyProfileScreen.js',
   'src/screens/SmartCardStyleScreen.js','src/screens/GoogleNFCReviewScreen.js',
   'src/screens/TrainingScreen.js','src/services/downloadQuota.js','src/utils/subscriptionInfo.js',
   'src/utils/extractUserData.js','src/context/AuthContext.js','src/services/api.js',
