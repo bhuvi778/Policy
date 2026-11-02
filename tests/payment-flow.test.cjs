@@ -46,6 +46,14 @@ test('trial subscriptions use subscription_id and do not invent a customer phone
   assert.equal(options.prefill.contact, '');
 });
 
+test('current backend data/order envelope opens native checkout with the server amount in paise', () => {
+  const detail = checkout.getCheckoutDetails({ success: true, data: { id: 'order_backend', amount: 118000, currency: 'INR' }, key: 'rzp_test_fixture' });
+  assert.equal(detail.nativeReady, true);
+  const options = checkout.buildRazorpayOptions(detail);
+  assert.equal(options.order_id, 'order_backend');
+  assert.equal(options.amount, 118000);
+});
+
 test('only a complete receipt matching the server-created order is submitted for verification', () => {
   const order = { key: 'fixture', planId: 'plan-fixture', data: { id: 'order_fixture' }, selectedCategories: ['motor'] };
   const receipt = { razorpay_order_id: 'order_fixture', razorpay_payment_id: 'pay_fixture', razorpay_signature: 'fixture-signature' };
@@ -162,7 +170,7 @@ test('fresh revoked membership removes stale active-plan fields while keeping pe
   assert.equal(getSubscriptionInfo(merged).active, false);
 });
 
-function paymentHarness({ response, sdkError, verificationError, active = true, hosted = false } = {}) {
+function paymentHarness({ response, sdkError, verificationError, active = true, hosted = false, pendingPayment, profile, mode = 'direct', storageError = false } = {}) {
   let index = 0;
   const hooks = [], effects = [], alerts = [], verifiedBodies = [], resets = [], openedUrls = [], refreshes = [];
   let opened = 0;
@@ -180,13 +188,12 @@ function paymentHarness({ response, sdkError, verificationError, active = true, 
     'react-native': { View: 'View', Text: 'Text', TouchableOpacity: 'Button', StatusBar: 'StatusBar', ActivityIndicator: 'Spinner', StyleSheet: { create: x => x }, Alert: { alert: (...args) => alerts.push(args) }, AppState: { addEventListener: () => ({ remove() {} }) }, Linking: { canOpenURL: async () => false, openURL: async url => openedUrls.push(url) } },
     'react-native-webview': { WebView: 'WebView' }, 'react-native-vector-icons/MaterialIcons': () => null,
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0 }) },
-    '../theme/colors': { Colors: {} }, '../context/AuthContext': { useAuth: () => ({ token: 'fixture-token', refreshProfile: async options => { refreshes.push(options); return { subscription: { status: active ? 'active' : 'pending' } }; } }) },
-    '../utils/distribution': { IS_PLAY_STORE_BUILD: false },
-    './MembershipStatusScreen': { __esModule: true, default: () => null },
+    '../theme/colors': { Colors: {} }, '../context/AuthContext': { useAuth: () => ({ user: { _id: 'fixture-user' }, token: 'fixture-token', refreshProfile: async options => { refreshes.push(options); return profile || { activePlan: active ? { _id: 'plan_fixture' } : null, planExpiryDate: active ? '2099-01-01' : null }; } }) },
+    '../services/paymentRecovery': { savePendingPayment: async () => { if (storageError) throw Error('Storage full'); }, clearPendingPayment: async () => {} },
     '../services/appData': { getSubscriptionInfo }, '../services/api': api, '../services/paymentCheckout': service,
     'react-native-razorpay': { __esModule: true, default: { open: async () => { opened++; if (sdkError) throw sdkError; return response; } } },
   })('src/screens/PaymentWebViewScreen.js').default;
-  const props = { navigation: { reset: value => resets.push(value) }, route: { params: hosted ? { url: 'https://rzp.io/i/fixture' } : { fromRegistration: true, checkout: { key: 'rzp_test_fixture', data: { id: 'order_fixture' }, selectedCategories: ['motor'], planId: 'plan_fixture' } } } };
+  const props = { navigation: { reset: value => resets.push(value) }, route: { params: hosted ? { url: 'https://rzp.io/i/fixture' } : { fromRegistration: true, pendingPayment, checkout: { mode, key: 'rzp_test_fixture', data: { id: mode === 'trial' ? 'sub_fixture' : 'order_fixture' }, selectedCategories: ['motor'], planId: 'plan_fixture' } } } };
   function render() {
     index = 0;
     let tree = screen(props);
@@ -208,7 +215,7 @@ test('native SDK success verifies on backend, refreshes membership, and returns 
   assert.equal(h.verifiedBodies.length, 1);
   assert.deepEqual(h.verifiedBodies[0].selectedCategories, ['motor']);
   assert.ok(h.refreshes[0].force && h.refreshes[0].membershipOnly);
-  assert.equal(h.alerts[0][0], 'Membership active');
+  assert.equal(h.alerts[0][0], 'Payment successful');
   h.alerts[0][2][0].onPress();
   assert.equal(h.resets[0].routes[0].name, 'Onboarding');
 });
@@ -232,7 +239,7 @@ test('checkout cancellation does not submit verification or activate a plan', as
   assert.equal(h.resets.length, 0);
 });
 
-test('status check recovers webhook activation when the payment verification response is unavailable', async () => {
+test('status check recovers a committed activation without repeating a timed-out verification POST', async () => {
   const h = paymentHarness({ verificationError: Error('request timeout'), response: { razorpay_order_id: 'order_fixture', razorpay_payment_id: 'pay_fixture', razorpay_signature: 'fixture-signature' } });
   h.effects.forEach(effect => effect());
   await settle();
@@ -240,7 +247,60 @@ test('status check recovers webhook activation when the payment verification res
   await h.buttons()[1].props.onPress();
   assert.equal(h.refreshes.length, 1);
   assert.equal(h.alerts.at(-1)[0], 'Membership active');
+  assert.equal(h.verifiedBodies.length, 1);
   assert.equal(h.opened(), 1);
+});
+
+test('an unrelated active plan cannot confirm the purchased upgrade', async () => {
+  const h = paymentHarness({ profile: { activePlan: { _id: 'old-plan' }, planExpiryDate: '2099-01-01' }, response: { razorpay_order_id: 'order_fixture', razorpay_payment_id: 'pay_fixture', razorpay_signature: 'fixture' } });
+  h.effects.forEach(effect => effect()); await settle();
+  assert.equal(h.alerts.length, 0);
+  assert.match(JSON.stringify(h.render()), /Waiting for the server/);
+});
+
+test('restarting with a pending receipt checks status without opening or charging checkout again', async () => {
+  const h = paymentHarness({ pendingPayment: { receipt: { razorpay_order_id: 'order_fixture', razorpay_payment_id: 'pay_fixture', razorpay_signature: 'fixture' } } });
+  h.effects.forEach(effect => effect()); await settle();
+  assert.equal(h.opened(), 0);
+  assert.equal(h.verifiedBodies.length, 0);
+  assert.equal(h.alerts.at(-1)[0], 'Membership active');
+});
+
+test('subscription receipt follows the subscription verification endpoint contract', async () => {
+  const h = paymentHarness({ mode: 'trial', storageError: true, response: { razorpay_subscription_id: 'sub_fixture', razorpay_payment_id: 'pay_fixture', razorpay_signature: 'fixture' } });
+  h.effects.forEach(effect => effect()); await settle();
+  assert.equal(h.verifiedBodies[0].razorpay_subscription_id, 'sub_fixture');
+  assert.equal(h.verifiedBodies[0].razorpay_order_id, undefined);
+  assert.equal(h.alerts.at(-1)[0], 'Payment successful');
+});
+
+test('a paid activePlan survives cancelled autopay, but explicit admin revocation wins over stale active flags', () => {
+  assert.equal(getSubscriptionInfo({ activePlan: { _id: 'paid', name: 'Gold' }, planExpiryDate: '2099-01-01', subscriptionStatus: 'cancelled' }).active, true);
+  assert.equal(getSubscriptionInfo({ activePlan: null, planExpiryDate: null, subscriptionStatus: 'active', hasActivePlan: true }).active, false);
+});
+
+test('unchanged existing membership does not prove that an unverified renewal succeeded', () => {
+  const profile = { activePlan: { _id: 'gold' }, planExpiryDate: '2099-01-01' };
+  const order = { planId: 'gold', previousPlanId: 'gold', previousValidTill: '2099-01-01' };
+  assert.equal(checkout.membershipMatchesCheckout(profile, order, true), false);
+  assert.equal(checkout.membershipMatchesCheckout({ ...profile, planExpiryDate: '2099-02-01' }, order, true), true);
+  assert.equal(checkout.membershipMatchesCheckout(profile, order, false), true);
+});
+
+test('durable receipt recovery survives reload, isolates accounts, and retains a newer order', async () => {
+  const store = new Map();
+  const mocks = { './storage': { __esModule: true, default: { getItem: async key => store.get(key), setItemDurable: async (key, value) => store.set(key, value), removeItem: async key => store.delete(key) } } };
+  const recovery = loader(mocks)('src/services/paymentRecovery.js');
+  const user = { _id: 'one' }, order = { key: 'public-key', data: { id: 'order_one' }, planId: 'gold', user: { email: 'private-fixture' }, token: 'secret-fixture' };
+  await recovery.savePendingPayment(user, order, { razorpay_payment_id: 'pay_one', razorpay_signature: 'signature', razorpay_order_id: 'order_one' });
+  assert.equal((await loader(mocks)('src/services/paymentRecovery.js').readPendingPayment(user)).receipt.razorpay_payment_id, 'pay_one');
+  assert.equal(await recovery.readPendingPayment({ _id: 'two' }), null);
+  assert.doesNotMatch([...store.values()][0], /private-fixture|secret-fixture/);
+  await recovery.savePendingPayment(user, { ...order, data: { id: 'order_two' } }, { razorpay_payment_id: 'pay_two' });
+  await recovery.clearPendingPayment(user, order);
+  assert.equal((await recovery.readPendingPayment(user)).receipt.razorpay_payment_id, 'pay_two');
+  await recovery.clearPendingPayment(user, { data: { id: 'order_two' } });
+  assert.equal(await recovery.readPendingPayment(user), null);
 });
 
 test('hosted checkout intercepts store and intent fallback URLs without opening a store', async () => {

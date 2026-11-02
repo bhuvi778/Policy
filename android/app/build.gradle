@@ -104,8 +104,8 @@ android {
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode = (project.findProperty('POLICYBHANDAR_VERSION_CODE') ?: '48').toInteger()
-        versionName = (project.findProperty('POLICYBHANDAR_VERSION_NAME') ?: '1.0.47')
+        versionCode = (project.findProperty('POLICYBHANDAR_VERSION_CODE') ?: '49').toInteger()
+        versionName = (project.findProperty('POLICYBHANDAR_VERSION_NAME') ?: '1.0.48')
 
         buildConfigField "String", "POLICYBHANDAR_DISTRIBUTION", "\"${policyBhandarDistribution}\""
 

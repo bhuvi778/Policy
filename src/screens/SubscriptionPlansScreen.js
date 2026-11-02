@@ -21,10 +21,9 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
+import { paymentOwner, readPendingPayment } from '../services/paymentRecovery';
 import { BRAND, getSubscriptionInfo } from '../services/appData';
 import { getCheckoutDetails } from '../services/paymentCheckout';
-import { IS_PLAY_STORE_BUILD } from '../utils/distribution';
-import MembershipStatusScreen from './MembershipStatusScreen';
 import { getUserProfileRole, normalizeProfileRole } from '../services/contentMapper';
 import {
   createPaymentOrder,
@@ -36,27 +35,6 @@ import {
 } from '../services/api';
 
 const LOGO = require('../assets/images/policybhandar_logo.png');
-
-const FALLBACK_PLANS = [
-  {
-    _id: 'monthly-access',
-    name: 'Monthly Access',
-    price: 100,
-    validityDays: 30,
-    dailyDownloadLimit: 20,
-    features: ['Marketing content access', 'Profile and prospect tools', 'Download support', 'Representative assistance'],
-    isActive: true,
-  },
-  {
-    _id: 'starter-access',
-    name: 'Starter Access',
-    price: 50,
-    validityDays: 30,
-    dailyDownloadLimit: 10,
-    features: ['Core content access', 'Basic downloads', 'WhatsApp support'],
-    isActive: true,
-  },
-];
 
 const toTitleCase = (value = '') =>
   String(value)
@@ -314,6 +292,24 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
   const [coupon, setCoupon] = useState(null);
   const [couponError, setCouponError] = useState('');
   const [paymentMode, setPaymentMode] = useState('');
+  const [pendingPayment, setPendingPayment] = useState(null);
+  const checkoutBusy = useRef(false);
+  const owner = paymentOwner(user);
+  const currentOwner = useRef(owner);
+  currentOwner.current = owner;
+
+  useEffect(() => {
+    let current = true;
+    const read = () => readPendingPayment(user).then(value => { if (current) setPendingPayment(value); });
+    read();
+    const unsubscribe = navigation.addListener?.('focus', read);
+    return () => { current = false; unsubscribe?.(); };
+  }, [navigation, owner]);
+
+  const resumePayment = pending => {
+    setCheckoutVisible(false);
+    navigation.navigate('PaymentWebView', { checkout: pending.checkout, pendingPayment: pending, fromRegistration, title: 'Payment status' });
+  };
 
   const selectedPlan = useMemo(
     () => plans.find((plan) => getPlanId(plan) === selectedPlanId) || plans[0],
@@ -430,7 +426,7 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
     try {
       const res = await getPlans();
       const nextPlans = extractPlans(res);
-      const safePlans = filterPlansForRole(nextPlans.length ? nextPlans : FALLBACK_PLANS, user);
+      const safePlans = filterPlansForRole(nextPlans, user);
       setPlans(safePlans);
       setSelectedPlanId((current) => (
         safePlans.some((plan) => getPlanId(plan) === current)
@@ -438,16 +434,9 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
           : getPlanId(safePlans[0])
       ));
       if (!nextPlans.length) {
-        setError('Live plans are empty, showing default membership options.');
+        setError('No membership plans are available right now. Pull to refresh or contact support.');
       }
     } catch (err) {
-      const safeFallbackPlans = filterPlansForRole(FALLBACK_PLANS, user);
-      setPlans(safeFallbackPlans);
-      setSelectedPlanId((current) => (
-        safeFallbackPlans.some((plan) => getPlanId(plan) === current)
-          ? current
-          : getPlanId(safeFallbackPlans[0])
-      ));
       setError(err?.data?.error || err?.data?.message || err?.message || 'Unable to load live plans.');
     } finally {
       setLoading(false);
@@ -500,7 +489,9 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
     await Linking.openURL(url);
   };
 
-  const handleTakePlan = () => {
+  const handleTakePlan = async () => {
+    const pending = await readPendingPayment(user);
+    if (pending) { setPendingPayment(pending); resumePayment(pending); return; }
     if (!selectedPlan) {
       Alert.alert('Select plan', 'Please select a membership plan first.');
       return;
@@ -567,7 +558,7 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
   };
 
   const handlePaymentCheckout = async (mode = 'direct') => {
-    if (!selectedPlan) return;
+    if (!selectedPlan || checkoutBusy.current) return;
     if (
       selectedCategoryIds.length < selectedCategoryCount &&
       categoryOptions.length >= selectedCategoryCount
@@ -578,9 +569,12 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
       );
       return;
     }
+    checkoutBusy.current = true;
     setProcessing(true);
     setPaymentMode(mode);
     try {
+      const pending = await readPendingPayment(user);
+      if (pending) { setPendingPayment(pending); resumePayment(pending); return; }
       const explicitSelectedAddons = addonOptions
         .filter((option) => selectedAddonIds.includes(option.id))
         .map((option) => option.id);
@@ -601,6 +595,7 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
       const res = mode === 'trial'
         ? await createPaymentSubscription(body)
         : await createPaymentOrder(body);
+      if (currentOwner.current !== owner || navigation.isFocused?.() === false) return;
       const details = getCheckoutDetails(res.data, mode);
       if (details.nativeReady) {
         setCheckoutVisible(false);
@@ -613,6 +608,8 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
             data: details.data,
             planId: getPlanId(selectedPlan),
             planName: selectedPlan.name,
+            previousPlanId: String(user?.activePlan?._id || user?.activePlan?.id || user?.activePlan || ''),
+            previousValidTill: subscription.validTill || '',
             selectedCategories: selectedCategoryIds,
             selectedAddons,
             couponCode: coupon?.code || '',
@@ -647,6 +644,7 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
         ]
       );
     } finally {
+      checkoutBusy.current = false;
       setProcessing(false);
       setPaymentMode('');
     }
@@ -678,6 +676,12 @@ const SubscriptionPlansScreen = ({ navigation, route }) => {
           />
         }
       >
+        {pendingPayment ? <View style={styles.checkoutSummary}>
+          <Text style={styles.checkoutMeta}>Payment confirmation pending. Check status before paying again.</Text>
+          <TouchableOpacity style={styles.checkoutSecondary} onPress={() => resumePayment(pendingPayment)}>
+            <Text style={styles.checkoutSecondaryText}>Check payment status</Text>
+          </TouchableOpacity>
+        </View> : null}
         <View style={styles.introBand}>
           <View style={styles.logoWrap}>
             <View style={styles.logoClip}>
@@ -1430,5 +1434,4 @@ const styles = StyleSheet.create({
   secondaryBtnText: { color: Colors.textGray, fontSize: 13, fontWeight: '700' },
 });
 
-const SubscriptionScreen = (props) => IS_PLAY_STORE_BUILD ? <MembershipStatusScreen {...props} /> : <SubscriptionPlansScreen {...props} />;
-export default SubscriptionScreen;
+export default SubscriptionPlansScreen;

@@ -64,6 +64,18 @@ export const buildPaymentVerification = (checkout, response = {}) => {
   };
 };
 
+const readId = value => text(typeof value === 'object' ? value?._id || value?.id : value);
+export const membershipMatchesCheckout = (profile, checkout = {}, requireChange = false) => {
+  const planId = readId(profile?.activePlan) || readId(profile?.planId) || readId(profile?.subscription?.planId);
+  if (checkout.planId && planId !== String(checkout.planId)) return false;
+  // A pre-existing plan is not evidence that a timed-out renewal was committed.
+  if (requireChange && checkout.previousPlanId === planId) {
+    const expiry = profile?.planExpiryDate || profile?.expiryDate || profile?.subscription?.endDate || '';
+    return !!expiry && Date.parse(expiry) > Date.parse(checkout.previousValidTill || '1970-01-01');
+  }
+  return true;
+};
+
 // A URL is only a signal to refresh the authenticated profile, never proof of payment.
 export const paymentReturnState = (value = '') => {
   try {

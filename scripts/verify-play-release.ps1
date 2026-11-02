@@ -1,6 +1,6 @@
 param(
-  [int]$VersionCode = 48,
-  [string]$VersionName = '1.0.47',
+  [int]$VersionCode = 49,
+  [string]$VersionName = '1.0.48',
   [string]$OutputDirectory = '',
   [string]$PythonCommand = 'python'
 )

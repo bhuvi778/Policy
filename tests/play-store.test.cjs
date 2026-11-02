@@ -23,16 +23,16 @@ function load(file, mocks = {}, suffix = '', timers = []) {
 const element = (type, props, ...children) => ({ type, props: { ...props, children } });
 const flatten = (node, result = []) => { if (!node || typeof node !== 'object') return result; result.push(node); (node.props?.children || []).flat(Infinity).forEach(child => flatten(child, result)); return result; };
 
-test('Android defaults to store access-only; only an explicit native direct channel enables purchases', () => {
+test('Native distribution metadata identifies the channel without changing checkout availability', () => {
   for (const [os, channel, expected] of [['android', undefined, true], ['android', 'play', true], ['android', 'direct', false], ['ios', undefined, false]]) {
     const dist = load('src/utils/distribution.js', { 'react-native': { Platform: { OS: os }, NativeModules: { PolicyBhandarDistribution: { channel, versionName: '1.0.47' } } } });
     assert.equal(dist.IS_PLAY_STORE_BUILD, expected);
   }
 });
 
-test('Play navigator has membership status and no payment or custom rating route', () => {
+test('Play navigator retains plans and Razorpay payment routes', () => {
   const React = { createElement: element, Component: class {} };
-  const status = () => null;
+  const plans = () => null;
   const fallback = () => null;
   const mocks = {
     react: React, 'react-native': { Platform: { OS: 'android' }, StyleSheet: { create: value => value } },
@@ -40,60 +40,14 @@ test('Play navigator has membership status and no payment or custom rating route
     'react-native-gesture-handler': { GestureHandlerRootView: fallback }, 'react-native-safe-area-context': { SafeAreaProvider: fallback },
     './src/context/AuthContext': { useAuth: () => ({ user: { name: 'Fixture' }, authLoading: false }) },
     './src/services/appData': { getSubscriptionInfo: () => ({ active: true }) }, './src/utils/distribution': { IS_PLAY_STORE_BUILD: true },
-    './src/screens/MembershipStatusScreen': { __esModule: true, default: status },
+    './src/screens/SubscriptionPlansScreen': { __esModule: true, default: plans },
   };
   for (const match of fs.readFileSync('App.js','utf8').matchAll(/import \w+ from '(\.\/src\/screens\/[^']+)'/g)) mocks[match[1]] ||= { __esModule: true, default: fallback };
   const app = load('App.js', mocks, '\nexport { RootNavigator, SubscriptionRoute };');
   const routes = flatten(app.RootNavigator()).filter(node => node.type === 'Screen').map(node => node.props.name);
-  for (const name of ['Home', 'Subscription', 'MyProfile']) assert.ok(routes.includes(name));
-  for (const name of ['PaymentWebView', 'RateUs', 'SmartCardReview']) assert.equal(routes.includes(name), false);
-  assert.equal(app.SubscriptionRoute({}).type, status);
-});
-
-test('even directly mounting the payment screen in a Play build renders only membership status', () => {
-  let sdkCalls = 0;
-  const status = () => null;
-  const mocks = {
-    react: { createElement: element }, 'react-native': { StyleSheet: { create: value => value } },
-    'react-native-webview': {}, 'react-native-vector-icons/MaterialIcons': () => null, 'react-native-safe-area-context': {},
-    '../theme/colors': { Colors: {} }, '../context/AuthContext': {}, '../services/appData': {}, '../services/api': {},
-    '../services/paymentCheckout': {}, '../utils/distribution': { IS_PLAY_STORE_BUILD: true },
-    './MembershipStatusScreen': { __esModule: true, default: status },
-    'react-native-razorpay': { open: () => sdkCalls++ },
-  };
-  const payment = load('src/screens/PaymentWebViewScreen.js', mocks).default;
-  assert.equal(payment({ route: { params: { checkout: { key: 'fixture' } } } }).type, status);
-  assert.equal(sdkCalls, 0);
-});
-
-test('membership status has no purchase CTA and refreshes an admin activation into the app', async () => {
-  let index = 0, active = false;
-  const hooks = [], effects = [], timers = [], resets = [], reads = [];
-  const React = {
-    createElement: element,
-    useRef(value) { const key = index++; return hooks[key] ||= { current: value }; },
-    useState(value) { const key = index++; if (!(key in hooks)) hooks[key] = value; return [hooks[key], value => { hooks[key] = value; }]; },
-    useCallback: fn => fn, useEffect: fn => effects.push(fn),
-  };
-  const mocks = {
-    react: React,
-    'react-native': { View: 'View', SafeAreaView: 'SafeAreaView', Text: 'Text', TouchableOpacity: 'Button', StyleSheet: { create: value => value }, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } },
-    '../theme/colors': { Colors: {} },
-    '../context/AuthContext': { useAuth: () => ({ user: { name: 'Fixture' }, logout: async () => {}, refreshProfile: async options => { reads.push(options); return active ? { activePlan: { id: 'assigned', name: 'Admin Plan' } } : { hasActivePlan: false }; } }) },
-  };
-  const screen = load('src/screens/MembershipStatusScreen.js', mocks, '', timers).default;
-  const props = { navigation: { isFocused: () => true, addListener: () => () => {}, reset: value => resets.push(value), navigate: () => {} } };
-  const tree = screen(props);
-  assert.doesNotMatch(JSON.stringify(tree), /razorpay|purchase|buy now|whatsapp|https:\/\//i);
-  const cleanups = effects.map(fn => fn()).filter(fn => typeof fn === 'function');
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(timers[0].ms, 15000);
-  assert.equal(resets.length, 0);
-  active = true;
-  await timers[0].fn();
-  assert.ok(reads.every(options => options.force && options.membershipOnly));
-  assert.equal(resets[0].routes[0].name, 'Home');
-  cleanups.forEach(fn => fn());
+  for (const name of ['Home', 'Subscription', 'MyProfile', 'PaymentWebView']) assert.ok(routes.includes(name));
+  for (const name of ['RateUs', 'SmartCardReview']) assert.equal(routes.includes(name), false);
+  assert.equal(app.SubscriptionRoute({}).type, plans);
 });
 
 test('download access agrees with membership and respects nested admin plan limits', async () => {
@@ -121,16 +75,52 @@ function cardMocks(store) {
   };
 }
 
-test('NFC templates remain accessible but store builds have no card booking buttons', () => {
+test('NFC booking buttons remain available in both Play and direct builds', () => {
   for (const file of ['src/screens/SmartCardStyleScreen.js','src/screens/GoogleNFCReviewScreen.js']) {
     const store = load(file, cardMocks(true)).default({ navigation: {} });
     const direct = load(file, cardMocks(false)).default({ navigation: {} });
-    assert.doesNotMatch(JSON.stringify(store), /Book Your NFC/);
+    assert.match(JSON.stringify(store), /Book Your NFC/);
     assert.match(JSON.stringify(direct), /Book Your NFC/);
   }
 });
 
-test('legacy upgrade prompt cannot render in the Play distribution', () => {
-  const prompt = load('src/components/SubscriptionModal.js', cardMocks(true)).default;
-  assert.equal(prompt({ visible: true }), null);
+test('upgrade prompt remains visible with an actionable Upgrade button in a Play build', () => {
+  const mocks = cardMocks(true);
+  mocks.react.useRef = value => ({ current: value });
+  mocks['react-native'].Animated = { Value: class {} , View: 'AnimatedView' };
+  mocks['../services/appData'] = { getSubscriptionInfo: () => ({ active: false }), getAssignedFranchise: () => ({}), getAssignedRep: () => ({}), BRAND: {} };
+  const prompt = load('src/components/SubscriptionModal.js', mocks).default;
+  const upgrade = () => {};
+  const tree = prompt({ visible: true, userData: {}, onUpgrade: upgrade });
+  assert.ok(tree);
+  assert.ok(flatten(tree).some(node => node.props?.onPress === upgrade));
+});
+
+test('Buy Now creates one backend order and passes native Razorpay checkout rather than any store link', async () => {
+  let index = 0, states = [], pending = null, orders = 0;
+  const navigations = [], alerts = [];
+  const mocks = cardMocks(true);
+  mocks.react = { ...mocks.react, useRef: value => ({ current: value }), useMemo: fn => fn(), useCallback: fn => fn,
+    useState(value) { const key = index++; if (!(key in states)) states[key] = key === 0 ? [{ _id: 'plan_fixture', name: 'Gold', price: 100, validityDays: 30 }] : key === 2 ? false : value;
+      return [states[key], next => { states[key] = typeof next === 'function' ? next(states[key]) : next; }]; } };
+  mocks['react-native'].Alert = { alert: (...args) => alerts.push(args) };
+  mocks['../services/appData'] = { BRAND: {}, getSubscriptionInfo: () => ({ active: false }) };
+  mocks['../context/AuthContext'] = { useAuth: () => ({ user: { _id: 'fixture-user' } }) };
+  mocks['../services/contentMapper'] = { getUserProfileRole: () => '', normalizeProfileRole: () => '' };
+  mocks['../services/paymentRecovery'] = { paymentOwner: user => user._id, readPendingPayment: async () => pending };
+  mocks['../services/api'] = { createPaymentOrder: async () => { orders++; return { data: { success: true, key: 'fixture', data: { id: 'order_fixture', amount: 11800, currency: 'INR' }, url: 'https://play.google.com/store/apps' } }; } };
+  const screen = load('src/screens/SubscriptionPlansScreen.js', mocks).default;
+  const navigation = { navigate: (...args) => navigations.push(args), isFocused: () => true };
+  const render = () => { index = 0; return screen({ navigation }); };
+  const buy = () => flatten(render()).find(node => node.props?.onPress && JSON.stringify(node.props.children).includes('Buy Now'));
+  await buy().props.onPress();
+  assert.equal(orders, 1);
+  assert.equal(navigations[0][0], 'PaymentWebView');
+  assert.equal(navigations[0][1].checkout.data.id, 'order_fixture');
+  assert.equal(navigations[0][1].url, undefined);
+  assert.equal(alerts.length, 0);
+  pending = { checkout: { data: { id: 'order_pending' } }, receipt: { razorpay_payment_id: 'pay_pending' } };
+  await buy().props.onPress();
+  assert.equal(orders, 1);
+  assert.equal(navigations.at(-1)[1].pendingPayment, pending);
 });

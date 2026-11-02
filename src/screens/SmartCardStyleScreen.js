@@ -7,7 +7,6 @@ import {
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { Colors } from '../theme/colors';
-import { IS_PLAY_STORE_BUILD } from '../utils/distribution';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 import { searchMaterialContent } from '../services/contentMapper';
@@ -125,7 +124,6 @@ const SmartCardStyleScreen = ({ navigation }) => {
   };
 
   const handleBook = () => {
-    if (IS_PLAY_STORE_BUILD) return;
     Alert.alert('Book NFC Card', 'Your NFC Visiting Card order has been placed!\nOur team will contact you shortly.', [{ text: 'OK' }]);
   };
 
@@ -174,11 +172,11 @@ const SmartCardStyleScreen = ({ navigation }) => {
       ) : null}
 
       {/* Book Button */}
-      {!IS_PLAY_STORE_BUILD && <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 10 }]}>
+      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 10 }]}>
         <TouchableOpacity style={styles.bookBtn} onPress={handleBook} activeOpacity={0.85}>
           <Text style={styles.bookBtnTxt}>Book Your NFC Visiting Card</Text>
         </TouchableOpacity>
-      </View>}
+      </View>
 
       {/* Preview Modal */}
       <Modal visible={previewVisible} animationType="slide" onRequestClose={() => setPreviewVisible(false)}>

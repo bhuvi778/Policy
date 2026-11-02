@@ -18,25 +18,26 @@ Place the keystore file locally at `android/app/policybhandar-release.keystore`,
 With the four signing variables set in the process environment, run:
 
 ```powershell
-.\scripts\build-play-release.ps1 -VersionCode 48 -VersionName 1.0.47
+.\scripts\build-play-release.ps1 -VersionCode 49 -VersionName 1.0.48
 ```
 
 Use a version code greater than every previously uploaded code in Play Console,
 including testing tracks. The script forces the `play` distribution, keeps all
 four Android ABIs, and copies the signed AAB, APK, mapping and native symbols to
-`outputs/playstore-v48/`. Local signing values and generated files are excluded
+`outputs/playstore-v49/`. Local signing values and generated files are excluded
 from Git.
 
-The Play build offers existing membership access/status without in-app plan
-purchases, Razorpay checkout, or links asking users to pay elsewhere. Its native
-distribution constant controls this behavior and defaults safely to `play`.
-Do not change it from the server or through a user setting.
+Purchasing is enabled in this release. Membership plans, Buy Now and Upgrade
+open the native Razorpay checkout using server-created orders/subscriptions.
+The native distribution constant is metadata and does not disable purchasing.
 
-The separate direct distribution can retain Razorpay:
+Version 48 used the earlier access-only behavior and is superseded by version 49.
+Do not upload v48 when delivering the restored purchase flow. Store billing
+eligibility and approval remain separate from the technical checkout fix.
+
+After building, validate the original upload signature, version, JavaScript
+sources, four ABIs and 16 KB alignment:
 
 ```powershell
-cd android
-.\gradlew.bat app:assembleRelease '-PPOLICYBHANDAR_DISTRIBUTION=direct'
+.\scripts\verify-play-release.ps1 -VersionCode 49 -VersionName 1.0.48
 ```
-
-Never upload the direct-distribution APK/AAB to Play as the access-only release.

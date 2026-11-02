@@ -1,82 +1,82 @@
 # Payment and membership activation
 
-## Distribution modes
+## Checkout and return
 
-Android Play releases default to `POLICYBHANDAR_DISTRIBUTION=play`. Their plans
-route is a membership-status screen, and the payment route is not registered.
-Directly mounting either old purchase screen also renders only status in this
-build. Registration and inactive-account login keep the user on this screen
-until the backend confirms access. Menu/profile/training/download messages do
-not offer purchases or ask the user to pay elsewhere. No plan catalogue or
-payment request is sent by the status screen.
+Membership plans, Buy Now, Upgrade and card booking remain available. Both
+Android distribution channels and the shared iOS JavaScript code retain the
+purchase routes. The `play` native constant no longer disables purchasing.
+Version 49 supersedes the access-only v48 build.
 
-Use `-PPOLICYBHANDAR_DISTRIBUTION=direct` for a separate Android distribution that
-retains the Razorpay flow described below. The current release scope is Android
-only; no new iOS archive or submission was performed.
+The official react-native-razorpay 3.0.0 SDK opens the backend-created order or
+subscription. Its receipt is validated against that checkout and sent to the
+existing authenticated verification endpoint. A fresh profile matching the
+selected plan then confirms access. A URL or client callback alone does not
+prove payment success. Confirmed payments show Payment successful and Continue
+returns to Home, or registration onboarding.
 
-Direct checkout uses the official `react-native-razorpay` native SDK (3.0.0).
-The server creates the order/subscription; the app sends the returned receipt to
-the existing authenticated verification endpoint. Only a fresh authenticated
-profile can confirm membership access. A success URL or a native callback alone
-does not unlock a plan.
+On timeout, the screen says confirmation pending and asks the user to check
+status before paying again. The minimal receipt and selected-plan context are
+stored per account on device, without authentication tokens or customer prefill.
+After reopening Membership Plan, Check payment status resumes that receipt
+without reopening Razorpay or creating a second order. A fresh profile is read
+before repeating verification, since the inspected backend does not provide an
+idempotent payment ledger. An unchanged old plan does not prove that a renewal
+was committed. Device storage failure does not block submitting verification.
 
-## Server contract
+## Inspected backend contract
 
-- `POST /api/payments/create-order`: return a public Razorpay key and an order
-  with `id: "order_..."`, amount in minor units and currency. A nested `order`
-  record is supported. The app sends the selected plan, categories and addons.
-- `POST /api/payments/create-subscription`: return the key and `id: "sub_..."`
-  or `subscription_id`. A nested `subscription` record is supported.
-- Existing verification routes `/api/payments/verify` and
-  `/api/payments/verify-subscription` must validate the signature and match the
-  order/subscription to the authenticated user and intended plan on the server.
-  Acknowledge successful verification only after persisting the payment result.
-- `GET /api/auth/me` must return the current admin-assigned or paid entitlement.
-  Supported shapes include `activePlan`, active subscription/membership records,
-  and explicit active flags and expiry dates. A bare selected `planId` without
-  activation evidence does not unlock membership. Expired, pending or revoked
-  subscriptions do not unlock access through stale flags.
+Read-only source inspection: Policy_bhandar backend commit
+9f2049b7735007b6aeb10d66856edba31971da93. This is source evidence, not proof
+that the deployed server has the same version.
 
-If a secure hosted payment URL is the only checkout information returned, it
-still opens in the payment WebView. Store redirects and intent fallback URLs
-are intercepted. Only supported installed UPI app schemes can open externally.
-A return to the app triggers an authenticated membership check. The hosted
-provider/backend must process its callback/webhook; the app cannot manufacture
-missing server verification.
+- POST /api/payments/create-order returns {success, data: order, key}, with
+  order.id = order_..., amount in paise and currency. It does not return a Play
+  Store URL. The app prioritizes this native checkout over any generic URL.
+- POST /api/payments/create-subscription returns the same envelope with a sub_ ID.
+- POST /api/payments/verify and verify-subscription receive the matching Razorpay
+  reference, payment ID, signature, planId, selectedCategories, selectedAddons and
+  couponCode. The backend validates HMAC and writes the user's activePlan and
+  planExpiryDate. Subscription verification also sets subscriptionStatus.
+- GET /api/auth/me populates activePlan. Admin assignment updates that field and
+  expiry. Explicit activePlan=null revokes access even if a stale top-level
+  subscriptionStatus says active. A cancelled recurring mandate does not revoke
+  an independently paid unexpired activePlan.
 
-## Activation refresh
+A secure hosted URL remains a compatibility fallback if the backend supplies no
+native order. WebView intercepts store URLs and intent browser fallbacks; only
+supported installed UPI app schemes open externally. Hosted checkout requires
+server callback/webhook processing and a fresh authenticated access check.
 
-On the plans screen, an inactive account is checked on focus, foreground return
-and every 15 seconds while the screen remains visible. Manual refresh forces a
-fresh read. Payment confirmation polls a bounded number of fresh reads. Pending
-personal profile edits no longer prevent membership reads, and older profile
-responses cannot overwrite a newer read. Waiting users continue to Home (or
-registration onboarding) after confirmed activation.
+## Limits requiring server or device verification
 
-Verified payment with delayed activation remains pending and offers status
-checking rather than claiming success or asking the user to pay again.
+No authenticated real payment, money movement or admin mutation was performed.
+No phone was connected for this build. The inspected backend has no payment
+ledger/webhook and no deployed backend changes were made. Full recovery when the
+app is killed before the native receipt callback requires backend payment
+reconciliation. Re-verification must be made idempotent on the server for strict
+once-only processing; the client fresh-profile check reduces repeated writes
+but cannot provide that server guarantee. Verify server-side ownership, amount,
+plan and selected permissions against the originally created order before
+production charging; this source currently relies primarily on receipt HMAC.
 
-## Building and validating
+Plans use real API records only. A failed plan refresh retains previously loaded
+real records and shows the error; first-load failure does not invent purchasable
+plan IDs/prices. Inactive membership refresh runs on focus, foreground return
+and every 15 seconds while visible. Personal profile edits cannot block it.
 
-This adds native code; old APKs/IPAs and a JavaScript-only update do not include
-the SDK. Install npm dependencies and rebuild Android. On macOS run `pod install`
-inside `ios` before archiving the iOS app; CocoaPods must update `Podfile.lock`.
-The lockfile was not synthesized on Windows.
+## Build and validation
 
-Run `node --test tests/*.test.cjs`. The payment suite covers matching receipts,
-server verification ordering, cancellations, delayed activation, store fallbacks,
-admin entitlement wrappers, stale reads and pending personal edits. These use
-fixtures; they are not real charges or live admin-panel mutations.
+Rebuild native apps; a JavaScript-only update cannot add the SDK. Android v49
+includes all four ABIs and the original upload signature. On macOS run pod
+install inside ios, then archive; no iOS native archive was produced on Windows.
+Run node --test --test-concurrency=2 tests/*.test.cjs. Fixture tests cover native
+receipt verification, cancellation, timeout recovery, account isolation, admin
+activation/revocation, old-plan mismatch and purchase-route availability.
 
-Before a store release, use an authorized Razorpay test account to exercise UPI
-return, successful verification, failure/cancellation and delayed activation on
-a device. Also assign a plan in the real admin panel and verify `/api/auth/me`
-returns it. No authenticated backend account, connected phone or macOS iOS build
-was available during the implementation checks.
+Use an authorized test account and a physical device to verify successful UPI
+return, cancellation and delayed activation before production rollout. Payment
+routing fixes do not establish store billing eligibility or guarantee approval.
 
-Razorpay's integration guidance recommends the native SDK for mobile checkout:
+Official integration guidance:
+https://github.com/razorpay/react-native-razorpay
 https://razorpay.com/docs/payments/payment-gateway/callback-url/
-
-Payment routing fixes do not by themselves establish store billing eligibility.
-The existing App Store submission notes cover the separate digital-subscription
-purchase requirements.

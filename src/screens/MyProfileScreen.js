@@ -16,7 +16,6 @@ import {
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
-import { IS_PLAY_STORE_BUILD } from '../utils/distribution';
 import { useAuth } from '../context/AuthContext';
 import { changePassword, deleteAccount } from '../services/api';
 import {
@@ -500,7 +499,7 @@ const MyProfileScreen = ({ navigation }) => {
             <Text style={styles.membershipNote}>No active subscription is linked to this account yet.</Text>
           ) : null}
           <TouchableOpacity style={styles.renewBtn} onPress={() => navigation.navigate('Subscription')}>
-            <Text style={styles.renewText}>{IS_PLAY_STORE_BUILD ? 'View membership status' : subscription.active ? 'Manage Plan' : 'Choose Plan'}</Text>
+            <Text style={styles.renewText}>{subscription.active ? 'Manage Plan' : 'Choose Plan'}</Text>
           </TouchableOpacity>
         </View>
 

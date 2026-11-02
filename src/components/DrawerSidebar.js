@@ -17,7 +17,7 @@ const DRAWER_WIDTH = SCREEN_WIDTH * 0.75;
 const NAV_ITEMS = [
   { id: 'home', icon: 'home', label: 'Home' },
   { id: 'profile', icon: 'account-box', label: 'My Profile' },
-  { id: 'subscription', icon: 'card-membership', label: IS_PLAY_STORE_BUILD ? 'Membership Status' : 'Membership Plan' },
+  { id: 'subscription', icon: 'card-membership', label: 'Membership Plan' },
   { id: 'training', icon: 'school', label: 'Training' },
   { id: 'about', icon: 'person', label: 'About US' },
   { id: 'contact', icon: 'phone', label: 'Contact Us' },

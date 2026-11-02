@@ -1,6 +1,6 @@
 param(
-  [ValidateRange(1,2100000000)][int]$VersionCode = 48,
-  [ValidatePattern('^\d+\.\d+\.\d+$')][string]$VersionName = '1.0.47',
+  [ValidateRange(1,2100000000)][int]$VersionCode = 49,
+  [ValidatePattern('^\d+\.\d+\.\d+$')][string]$VersionName = '1.0.48',
   [string]$OutputDirectory = ''
 )
 $ErrorActionPreference = 'Stop'

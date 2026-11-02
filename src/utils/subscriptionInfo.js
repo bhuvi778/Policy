@@ -25,7 +25,10 @@ export const getSubscriptionInfo = (user = {}) => {
   const plan = { ...metadata, ...record };
   const name = first(plan.name, plan.planName, user.subscriptionType, user.planName, plan.type) || '';
   const validTill = expires(record) || expires(user) || '';
-  const status = statusOf(first(record.status, user.subscriptionStatus, user.planStatus));
+  const hasActivePlanField = Object.prototype.hasOwnProperty.call(user, 'activePlan');
+  // In our backend subscriptionStatus describes the recurring Razorpay mandate.
+  // A cancelled mandate must not cancel a separately paid, unexpired activePlan.
+  const status = statusOf(first(record.status, user.planStatus, hasActivePlanField ? undefined : user.subscriptionStatus));
   const ids = [plan._id, plan.id, name, plan.code, plan.slug, user.activePlan, user.planId,
     user.subscriptionId, user.role, user.accessRole].filter(value => typeof value === 'string');
   const labels = [user.roles, user.permissions, user.allowedPlans, user.assignedPlans].flatMap(value => Array.isArray(value) ? value : [])
@@ -40,6 +43,6 @@ export const getSubscriptionInfo = (user = {}) => {
   const confirmedPaidAssignment = !status && hasAssignment && statusOf(user.paymentStatus) === 'paid';
   const confirmed = isAllFree || assignedActivePlan || confirmedPaidAssignment || yes(user.hasActivePlan) || yes(user.isSubscribed) || yes(record.active) || yes(record.isActiveSubscription) || allowedStatus(status);
   // A plan selected during registration or an unpaid Razorpay subscription must not unlock access.
-  const active = !blockedStatus(status) && !expiryBlocked && Boolean(confirmed || (hasAssignment && !!validTill && expiryTime >= Date.now()));
+  const active = Boolean((!hasActivePlanField || assignedActivePlan) && !blockedStatus(status) && !expiryBlocked && (confirmed || (hasAssignment && !!validTill && expiryTime >= Date.now())));
   return { active, name: active ? (isAllFree ? 'All Free' : name || 'Active Plan') : 'No active plan', validTill: active ? validTill : '', isAllFree };
 };

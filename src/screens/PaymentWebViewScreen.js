@@ -7,13 +7,12 @@ import { Colors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
 import { getSubscriptionInfo } from '../services/appData';
 import { verifyPaymentOrder, verifyPaymentSubscription } from '../services/api';
-import { buildPaymentVerification, buildRazorpayOptions, isHttpsPaymentUrl, isStoreUrl, paymentReturnState, waitForMembership } from '../services/paymentCheckout';
-import { IS_PLAY_STORE_BUILD } from '../utils/distribution';
-import MembershipStatusScreen from './MembershipStatusScreen';
+import { buildPaymentVerification, buildRazorpayOptions, isHttpsPaymentUrl, isStoreUrl, membershipMatchesCheckout, paymentReturnState, waitForMembership } from '../services/paymentCheckout';
+import { savePendingPayment, clearPendingPayment } from '../services/paymentRecovery';
 
 const PaymentWebViewScreen = ({ navigation, route }) => {
   const insets = useSafeAreaInsets();
-  const { refreshProfile, token } = useAuth();
+  const { refreshProfile, token, user } = useAuth();
   const webRef = useRef(null);
   const alive = useRef(true);
   const session = useRef(token);
@@ -22,8 +21,8 @@ const PaymentWebViewScreen = ({ navigation, route }) => {
   const busy = useRef(false);
   const started = useRef(false);
   const finished = useRef(false);
-  const receipt = useRef(null);
-  const verified = useRef(false);
+  const receipt = useRef(route?.params?.pendingPayment?.receipt || null);
+  const verified = useRef(!!route?.params?.pendingPayment?.verified);
   const externalPayment = useRef(false);
   const [loading, setLoading] = useState(true);
   const [phase, setPhase] = useState('opening');
@@ -42,15 +41,17 @@ const PaymentWebViewScreen = ({ navigation, route }) => {
   }, [fromRegistration, isCurrent, navigation]);
 
   const checkMembership = useCallback(async () => {
-    const fresh = await waitForMembership(refreshProfile, profile => getSubscriptionInfo(profile).active, { isCurrent });
+    const confirmsAccess = profile => getSubscriptionInfo(profile).active && membershipMatchesCheckout(profile, checkout || {}, !!receipt.current && !verified.current);
+    const fresh = await waitForMembership(refreshProfile, confirmsAccess, { isCurrent });
     if (!isCurrent()) return;
-    const active = !!fresh && getSubscriptionInfo(fresh).active;
+    const active = !!fresh && confirmsAccess(fresh);
     setLoading(false);
     if (active) {
       finished.current = true;
+      if (checkout) await clearPendingPayment(user, checkout).catch(() => {});
       setPhase('active');
       setMessage('Your membership is active.');
-      Alert.alert('Membership active', 'Your plan is active. You can continue in the app.', [
+      Alert.alert(verified.current ? 'Payment successful' : 'Membership active', 'Your plan is active. You can continue in the app.', [
         { text: 'Continue', onPress: () => returnToApp(true) },
       ]);
     } else {
@@ -59,7 +60,8 @@ const PaymentWebViewScreen = ({ navigation, route }) => {
         ? 'Payment verified. Waiting for the server to activate your plan. Do not pay again; check status shortly.'
         : 'The server has not confirmed an active plan yet. If money was deducted, do not pay again; check status or contact support.');
     }
-  }, [isCurrent, refreshProfile, returnToApp]);
+    return active;
+  }, [checkout, isCurrent, refreshProfile, returnToApp, user]);
 
   const verifyReceipt = useCallback(async (response) => {
     if (!checkout || busy.current || finished.current || !isCurrent()) return;
@@ -70,9 +72,13 @@ const PaymentWebViewScreen = ({ navigation, route }) => {
     setMessage('Verifying payment with the server...');
     try {
       const body = buildPaymentVerification(checkout, response);
+      await savePendingPayment(user, checkout, response).catch(() => {});
+      if (!isCurrent()) return;
       if (checkout.mode === 'trial') await verifyPaymentSubscription(body);
       else await verifyPaymentOrder(body);
+      if (!isCurrent()) return;
       verified.current = true;
+      await savePendingPayment(user, checkout, response, true).catch(() => {});
       await checkMembership();
     } catch (error) {
       if (isCurrent()) {
@@ -82,7 +88,7 @@ const PaymentWebViewScreen = ({ navigation, route }) => {
         Alert.alert('Confirmation pending', error?.data?.error || error?.message || 'Unable to verify payment. Please check status or contact support.');
       }
     } finally { busy.current = false; }
-  }, [checkMembership, checkout, isCurrent]);
+  }, [checkMembership, checkout, isCurrent, user]);
 
   const openNativeCheckout = useCallback(async () => {
     if (busy.current || !checkout || !isCurrent() || receipt.current) return;
@@ -106,18 +112,18 @@ const PaymentWebViewScreen = ({ navigation, route }) => {
     }
   }, [checkout, isCurrent, verifyReceipt]);
 
-  useEffect(() => {
-    if (!checkout || started.current) return;
-    started.current = true;
-    openNativeCheckout();
-  }, [checkout, openNativeCheckout]);
-
   const refreshStatus = useCallback(async () => {
     if (busy.current || finished.current || !isCurrent()) return;
     if (receipt.current && !verified.current) {
+      busy.current = true;
+      setLoading(true);
+      try {
+        // Check whether the previous verify already committed before retrying the POST.
+        if (await checkMembership()) return;
+      } finally { busy.current = false; }
       await verifyReceipt(receipt.current);
       if (verified.current || finished.current || !isCurrent()) return;
-      // A webhook may already have activated the plan even if the verify response was lost.
+      // The previous verification may have committed even if its response was lost.
     }
     busy.current = true;
     setLoading(true);
@@ -126,6 +132,13 @@ const PaymentWebViewScreen = ({ navigation, route }) => {
     try { await checkMembership(); }
     finally { busy.current = false; }
   }, [checkMembership, isCurrent, verifyReceipt]);
+
+  useEffect(() => {
+    if (!checkout || started.current) return;
+    started.current = true;
+    if (receipt.current) refreshStatus();
+    else openNativeCheckout();
+  }, [checkout, openNativeCheckout, refreshStatus]);
 
   useEffect(() => {
     const listener = AppState.addEventListener('change', state => {
@@ -281,5 +294,4 @@ const styles = StyleSheet.create({
   },
 });
 
-const PaymentRouteScreen = (props) => IS_PLAY_STORE_BUILD ? <MembershipStatusScreen {...props} /> : <PaymentWebViewScreen {...props} />;
-export default PaymentRouteScreen;
+export default PaymentWebViewScreen;

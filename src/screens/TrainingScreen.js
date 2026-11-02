@@ -16,7 +16,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
 import { getSubscriptionInfo } from '../services/appData';
-import { IS_PLAY_STORE_BUILD } from '../utils/distribution';
 import { getPlans } from '../services/api';
 import { loadTrainingCategories, loadTrainingVideos } from '../services/trainingData';
 
@@ -221,7 +220,7 @@ const TrainingScreen = ({ navigation }) => {
               onPress={() => navigation.navigate('Subscription')}
               activeOpacity={0.85}
             >
-              <Text style={[styles.actionText, styles.actionTextLocked]}>{IS_PLAY_STORE_BUILD ? 'Status' : 'Upgrade'}</Text>
+              <Text style={[styles.actionText, styles.actionTextLocked]}>Upgrade</Text>
             </TouchableOpacity>
           ) : null}
         </View>

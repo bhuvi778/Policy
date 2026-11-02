@@ -45,10 +45,6 @@ const PaymentWebViewRoute = (props) => {
 };
 
 const SubscriptionRoute = (props) => {
-  if (IS_PLAY_STORE_BUILD) {
-    const Screen = require('./src/screens/MembershipStatusScreen').default;
-    return <Screen {...props} />;
-  }
   const Screen = require('./src/screens/SubscriptionPlansScreen').default;
   return <Screen {...props} />;
 };
@@ -138,7 +134,7 @@ const RootNavigator = () => {
       <Stack.Screen name="ProspectManagement" component={ProspectManagementScreen} options={slideFromRight} />
       <Stack.Screen name="Scan" component={ScanScreen} options={slideFromRight} />
       <Stack.Screen name="Subscription" component={SubscriptionRoute} options={slideFromRight} />
-      {!IS_PLAY_STORE_BUILD && <Stack.Screen name="PaymentWebView" component={PaymentWebViewRoute} options={slideFromRight} />}
+      <Stack.Screen name="PaymentWebView" component={PaymentWebViewRoute} options={slideFromRight} />
       <Stack.Screen name="Onboarding" component={OnboardingScreen} options={{ gestureEnabled: false, cardStyleInterpolator: ({ current }) => ({ cardStyle: { opacity: current.progress } }) }} />
       {Platform.OS === 'android' && !IS_PLAY_STORE_BUILD && <Stack.Screen name="SmartCardReview" component={SmartCardReviewScreen} options={slideFromRight} />}
       <Stack.Screen name="PremiumCalendar" component={PremiumCalendarScreen} options={slideFromRight} />

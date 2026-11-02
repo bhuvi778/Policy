@@ -8,8 +8,8 @@ out explicitly. Everything else below is ready to copy in as-is.
 ## ⚠️ Read this before doing anything else: the subscription payment flow will likely get this app rejected
 
 `SubscriptionPlansScreen.js` → `PaymentWebViewScreen.js` charges for
-subscriptions (₹50–₹100/month, unlocking marketing content/downloads)
-through **Razorpay inside a WebView**. Apple's App Store Review Guideline
+subscriptions (with prices from the plans API, unlocking marketing content/downloads)
+through the **native Razorpay SDK**. Apple's App Store Review Guideline
 **3.1.1 (In-App Purchase)** requires that unlocking digital content or
 services *inside* an iOS app be sold through Apple's own In-App Purchase
 (IAP/StoreKit), not a third-party processor like Razorpay — this is one of
@@ -229,9 +229,9 @@ avoidable vs. what's load-bearing for having an account at all. Three real,
 code-verified reductions from the original draft:
 
 1. **Payment Info → declare "Not Collected."** `PaymentWebViewScreen.js`
-   loads Razorpay's own `checkout.js` inside the WebView — the card/bank
+   opens Razorpay's native SDK — the card/bank
    details never pass through PolicyBhandar's app code or backend. The app
-   only ever receives back `razorpay_payment_id`, `razorpay_subscription_id`,
+   only ever receives back `razorpay_payment_id`, `razorpay_order_id`, `razorpay_subscription_id`,
    `razorpay_signature` — opaque transaction reference strings, not the
    financial account data Apple's "Payment Info" category actually means
    (card numbers, bank account numbers). Since PolicyBhandar's own app/servers

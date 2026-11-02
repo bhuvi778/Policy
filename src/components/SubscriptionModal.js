@@ -14,7 +14,6 @@ import {
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { Colors } from '../theme/colors';
-import { IS_PLAY_STORE_BUILD } from '../utils/distribution';
 import { BRAND, getAssignedFranchise, getAssignedRep, getSubscriptionInfo } from '../services/appData';
 
 const { width } = Dimensions.get('window');
@@ -276,5 +275,4 @@ const styles = StyleSheet.create({
   },
 });
 
-const SubscriptionPrompt = (props) => IS_PLAY_STORE_BUILD ? null : <SubscriptionModal {...props} />;
-export default SubscriptionPrompt;
+export default SubscriptionModal;
