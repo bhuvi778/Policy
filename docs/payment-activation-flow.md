@@ -1,5 +1,19 @@
 # Payment and membership activation
 
+## Distribution modes
+
+Android Play releases default to `POLICYBHANDAR_DISTRIBUTION=play`. Their plans
+route is a membership-status screen, and the payment route is not registered.
+Directly mounting either old purchase screen also renders only status in this
+build. Registration and inactive-account login keep the user on this screen
+until the backend confirms access. Menu/profile/training/download messages do
+not offer purchases or ask the user to pay elsewhere. No plan catalogue or
+payment request is sent by the status screen.
+
+Use `-PPOLICYBHANDAR_DISTRIBUTION=direct` for a separate Android distribution that
+retains the Razorpay flow described below. The current release scope is Android
+only; no new iOS archive or submission was performed.
+
 Direct checkout uses the official `react-native-razorpay` native SDK (3.0.0).
 The server creates the order/subscription; the app sends the returned receipt to
 the existing authenticated verification endpoint. Only a fresh authenticated

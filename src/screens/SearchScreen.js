@@ -12,6 +12,7 @@ import { isDocumentItem, isMediaItem } from '../utils/material';
 import RecipientSheet from '../components/RecipientSheet';
 import { downloadTemplateToDevice } from '../services/downloads';
 import { useAuth } from '../context/AuthContext';
+import { IS_PLAY_STORE_BUILD } from '../utils/distribution';
 
 const POPULAR_SEARCHES = [
   'Life Insurance', 'Birthday Card', 'Daily Motivation',
@@ -20,7 +21,7 @@ const POPULAR_SEARCHES = [
 
 const APP_RESULTS = [
   { id: 'profile', title: 'My Profile', section: 'Account', route: 'MyProfile', icon: 'person' },
-  { id: 'subscription', title: 'Subscription Plans', section: 'Account', route: 'Subscription', icon: 'workspace-premium' },
+  { id: 'subscription', title: IS_PLAY_STORE_BUILD ? 'Membership Status' : 'Subscription Plans', section: 'Account', route: 'Subscription', icon: 'workspace-premium' },
   { id: 'calendar', title: 'Premium Calendar', section: 'Calendar', route: 'PremiumCalendar', icon: 'event-note' },
   { id: 'data-entry', title: 'Data Entry', section: 'Calendar', route: 'DataEntry', icon: 'edit-note' },
   { id: 'client-list', title: 'Client View', section: 'Reports', route: 'ClientList', icon: 'people-outline' },

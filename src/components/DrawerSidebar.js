@@ -9,6 +9,7 @@ import { Colors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
 import { BRAND, getAdvisorDisplayName, isDisplayName } from '../services/appData';
 import { getProfileImageUrl } from './ProfileFooterPreview';
+import { APP_VERSION, IS_PLAY_STORE_BUILD } from '../utils/distribution';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const DRAWER_WIDTH = SCREEN_WIDTH * 0.75;
@@ -16,11 +17,11 @@ const DRAWER_WIDTH = SCREEN_WIDTH * 0.75;
 const NAV_ITEMS = [
   { id: 'home', icon: 'home', label: 'Home' },
   { id: 'profile', icon: 'account-box', label: 'My Profile' },
-  { id: 'subscription', icon: 'card-membership', label: 'Membership Plan' },
+  { id: 'subscription', icon: 'card-membership', label: IS_PLAY_STORE_BUILD ? 'Membership Status' : 'Membership Plan' },
   { id: 'training', icon: 'school', label: 'Training' },
   { id: 'about', icon: 'person', label: 'About US' },
   { id: 'contact', icon: 'phone', label: 'Contact Us' },
-  ...(Platform.OS === 'android' ? [{ id: 'rate', icon: 'star-border', label: 'Rate Us' }] : []),
+  ...(Platform.OS === 'android' && !IS_PLAY_STORE_BUILD ? [{ id: 'rate', icon: 'star-border', label: 'Rate Us' }] : []),
   { id: 'terms', icon: 'description', label: 'Terms Of Use' },
   { id: 'privacy', icon: 'info-outline', label: 'Privacy & Policy' },
   { id: 'exit', icon: 'logout', label: 'Logout' },
@@ -129,7 +130,7 @@ const DrawerSidebar = ({ visible, onClose, activeItem = 'home', onNavigate, onLo
           <Text style={styles.footerCompany}>
             {userData?.company?.name || BRAND.name}
           </Text>
-          <Text style={styles.footerVersion}>v10.6.9</Text>
+          {APP_VERSION ? <Text style={styles.footerVersion}>v{APP_VERSION}</Text> : null}
         </View>
       </Animated.View>
     </View>

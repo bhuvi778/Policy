@@ -10,6 +10,7 @@ class PolicyBhandarNativePackage : ReactPackage {
     listOf(
       DownloadModule(reactContext),
       ClipboardModule(reactContext),
+      AppDistributionModule(reactContext),
       ProfileImagePickerModule(reactContext),
       VisitingCardScannerModule(reactContext)
     )

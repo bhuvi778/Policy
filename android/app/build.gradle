@@ -10,6 +10,10 @@ apply from: "../../node_modules/react-native-vector-icons/fonts.gradle"
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 def policyBhandarApplicationId = project.findProperty('POLICYBHANDAR_APPLICATION_ID') ?: 'com.policybhandar'
 def policyBhandarQaSigning = (project.findProperty('POLICYBHANDAR_QA_SIGNING') ?: 'false').toBoolean()
+def policyBhandarDistribution = project.findProperty('POLICYBHANDAR_DISTRIBUTION') ?: 'play'
+if (!(policyBhandarDistribution in ['play', 'direct'])) {
+    throw new GradleException('POLICYBHANDAR_DISTRIBUTION must be play or direct.')
+}
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -53,7 +57,7 @@ react {
     //
     //   A list of extra flags to pass to the 'bundle' commands.
     //   See https://github.com/react-native-community/cli/blob/main/docs/commands.md#bundle
-    // extraPackagerArgs = []
+    extraPackagerArgs = ["--max-workers", "2"]
 
     /* Hermes Commands */
     //   The hermes compiler command to run. By default it is 'hermesc'
@@ -100,8 +104,10 @@ android {
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 47
-        versionName "1.0.46"
+        versionCode = (project.findProperty('POLICYBHANDAR_VERSION_CODE') ?: '48').toInteger()
+        versionName = (project.findProperty('POLICYBHANDAR_VERSION_NAME') ?: '1.0.47')
+
+        buildConfigField "String", "POLICYBHANDAR_DISTRIBUTION", "\"${policyBhandarDistribution}\""
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
         externalNativeBuild {
@@ -134,6 +140,9 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
+            ndk {
+                debugSymbolLevel 'SYMBOL_TABLE'
+            }
             if (policyBhandarQaSigning) {
                 if (!policyBhandarApplicationId.endsWith('.qa')) {
                     throw new GradleException('QA signing requires a separate .qa application ID.')

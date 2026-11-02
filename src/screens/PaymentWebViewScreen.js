@@ -8,6 +8,8 @@ import { useAuth } from '../context/AuthContext';
 import { getSubscriptionInfo } from '../services/appData';
 import { verifyPaymentOrder, verifyPaymentSubscription } from '../services/api';
 import { buildPaymentVerification, buildRazorpayOptions, isHttpsPaymentUrl, isStoreUrl, paymentReturnState, waitForMembership } from '../services/paymentCheckout';
+import { IS_PLAY_STORE_BUILD } from '../utils/distribution';
+import MembershipStatusScreen from './MembershipStatusScreen';
 
 const PaymentWebViewScreen = ({ navigation, route }) => {
   const insets = useSafeAreaInsets();
@@ -279,4 +281,5 @@ const styles = StyleSheet.create({
   },
 });
 
-export default PaymentWebViewScreen;
+const PaymentRouteScreen = (props) => IS_PLAY_STORE_BUILD ? <MembershipStatusScreen {...props} /> : <PaymentWebViewScreen {...props} />;
+export default PaymentRouteScreen;

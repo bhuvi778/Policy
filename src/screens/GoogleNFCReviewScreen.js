@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { Colors } from '../theme/colors';
+import { IS_PLAY_STORE_BUILD } from '../utils/distribution';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 
@@ -42,6 +43,7 @@ const GoogleNFCReviewScreen = ({ navigation }) => {
   };
 
   const handleBook = () => {
+    if (IS_PLAY_STORE_BUILD) return;
     Alert.alert(
       'Book NFC Google Review Card',
       'Your NFC Google Review Card order has been placed!\nOur team will contact you shortly.',
@@ -179,11 +181,11 @@ const GoogleNFCReviewScreen = ({ navigation }) => {
       </ScrollView>
 
       {/* Book Button */}
-      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 10 }]}>
+      {!IS_PLAY_STORE_BUILD && <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 10 }]}>
         <TouchableOpacity style={styles.bookBtn} onPress={handleBook} activeOpacity={0.85}>
           <Text style={styles.bookBtnTxt}>Book Your NFC Google Review Card</Text>
         </TouchableOpacity>
-      </View>
+      </View>}
     </View>
   );
 };

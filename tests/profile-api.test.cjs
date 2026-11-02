@@ -1,6 +1,11 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),babel=require('@babel/core');
 function loadApi(){const module={exports:{}};const {code}=babel.transformSync(fs.readFileSync('src/services/api.js','utf8'),{configFile:false,babelrc:false,plugins:['@babel/plugin-transform-modules-commonjs']});new Function('module','exports',code)(module,module.exports);return module.exports;}
 const reply=()=>({ok:true,status:200,headers:{},text:async()=>JSON.stringify({user:{name:'New'}})});
+
+test('account deletion calls the backend DELETE endpoint instead of a local timer',async()=>{
+ const original=global.fetch;let request,url;global.fetch=async(u,o)=>{url=u;request=o;return reply()};
+ try{await loadApi().deleteAccount();assert.equal(request.method,'DELETE');assert.ok(url.endsWith('/api/auth/delete-account'));}finally{global.fetch=original;}
+});
 test('text-only profile update sends JSON, including explicit empty fields',async()=>{
  const original=global.fetch;let request;global.fetch=async(u,o)=>{request=o;return reply()};
  try {await loadApi().updateProfile({name:'New',licBranch:''},{token:'fixture-token'});assert.equal(request.method,'PUT');assert.equal(request.headers['Content-Type'],'application/json');assert.deepEqual(JSON.parse(request.body),{name:'New',licBranch:''});}finally{global.fetch=original;}

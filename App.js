@@ -35,6 +35,7 @@ import DataEntryScreen from './src/screens/DataEntryScreen';
 import MediaViewerScreen from './src/screens/MediaViewerScreen';
 import TrainingScreen from './src/screens/TrainingScreen';
 import { getSubscriptionInfo } from './src/services/appData';
+import { IS_PLAY_STORE_BUILD } from './src/utils/distribution';
 
 const Stack = createStackNavigator();
 
@@ -44,6 +45,10 @@ const PaymentWebViewRoute = (props) => {
 };
 
 const SubscriptionRoute = (props) => {
+  if (IS_PLAY_STORE_BUILD) {
+    const Screen = require('./src/screens/MembershipStatusScreen').default;
+    return <Screen {...props} />;
+  }
   const Screen = require('./src/screens/SubscriptionPlansScreen').default;
   return <Screen {...props} />;
 };
@@ -125,7 +130,7 @@ const RootNavigator = () => {
       <Stack.Screen name="MyProfile" component={MyProfileScreen} options={slideFromRight} />
       <Stack.Screen name="AboutUs" component={AboutUsScreen} options={slideFromRight} />
       <Stack.Screen name="ContactUs" component={ContactUsScreen} options={slideFromRight} />
-      {Platform.OS === 'android' && <Stack.Screen name="RateUs" component={RateUsScreen} options={slideFromRight} />}
+      {Platform.OS === 'android' && !IS_PLAY_STORE_BUILD && <Stack.Screen name="RateUs" component={RateUsScreen} options={slideFromRight} />}
       <Stack.Screen name="Terms" component={TermsScreen} options={slideFromRight} />
       <Stack.Screen name="Privacy" component={PrivacyPolicyScreen} options={slideFromRight} />
       <Stack.Screen name="Utility" component={UtilityScreen} options={slideFromRight} />
@@ -133,9 +138,9 @@ const RootNavigator = () => {
       <Stack.Screen name="ProspectManagement" component={ProspectManagementScreen} options={slideFromRight} />
       <Stack.Screen name="Scan" component={ScanScreen} options={slideFromRight} />
       <Stack.Screen name="Subscription" component={SubscriptionRoute} options={slideFromRight} />
-      <Stack.Screen name="PaymentWebView" component={PaymentWebViewRoute} options={slideFromRight} />
+      {!IS_PLAY_STORE_BUILD && <Stack.Screen name="PaymentWebView" component={PaymentWebViewRoute} options={slideFromRight} />}
       <Stack.Screen name="Onboarding" component={OnboardingScreen} options={{ gestureEnabled: false, cardStyleInterpolator: ({ current }) => ({ cardStyle: { opacity: current.progress } }) }} />
-      {Platform.OS === 'android' && <Stack.Screen name="SmartCardReview" component={SmartCardReviewScreen} options={slideFromRight} />}
+      {Platform.OS === 'android' && !IS_PLAY_STORE_BUILD && <Stack.Screen name="SmartCardReview" component={SmartCardReviewScreen} options={slideFromRight} />}
       <Stack.Screen name="PremiumCalendar" component={PremiumCalendarScreen} options={slideFromRight} />
       <Stack.Screen name="DataEntry" component={DataEntryScreen} options={slideFromRight} />
       <Stack.Screen name="NFCSmartCard" component={NFCSmartCardScreen} options={slideFromRight} />

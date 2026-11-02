@@ -181,11 +181,18 @@ function paymentHarness({ response, sdkError, verificationError, active = true, 
     'react-native-webview': { WebView: 'WebView' }, 'react-native-vector-icons/MaterialIcons': () => null,
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0 }) },
     '../theme/colors': { Colors: {} }, '../context/AuthContext': { useAuth: () => ({ token: 'fixture-token', refreshProfile: async options => { refreshes.push(options); return { subscription: { status: active ? 'active' : 'pending' } }; } }) },
+    '../utils/distribution': { IS_PLAY_STORE_BUILD: false },
+    './MembershipStatusScreen': { __esModule: true, default: () => null },
     '../services/appData': { getSubscriptionInfo }, '../services/api': api, '../services/paymentCheckout': service,
     'react-native-razorpay': { __esModule: true, default: { open: async () => { opened++; if (sdkError) throw sdkError; return response; } } },
   })('src/screens/PaymentWebViewScreen.js').default;
   const props = { navigation: { reset: value => resets.push(value) }, route: { params: hosted ? { url: 'https://rzp.io/i/fixture' } : { fromRegistration: true, checkout: { key: 'rzp_test_fixture', data: { id: 'order_fixture' }, selectedCategories: ['motor'], planId: 'plan_fixture' } } } };
-  function render() { index = 0; return screen(props); }
+  function render() {
+    index = 0;
+    let tree = screen(props);
+    while (tree && typeof tree.type === 'function') tree = tree.type(tree.props);
+    return tree;
+  }
   const tree = render();
   function find(node, type) { if (!node || typeof node !== 'object') return; if (node.type === type) return node; for (const child of (node.props?.children || []).flat(Infinity)) { const found = find(child, type); if (found) return found; } }
   const buttons = (node, result = []) => { if (!node || typeof node !== 'object') return result; if (node.type === 'Button') result.push(node); (node.props?.children || []).flat(Infinity).forEach(child => buttons(child, result)); return result; };

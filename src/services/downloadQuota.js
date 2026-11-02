@@ -1,5 +1,8 @@
 import Storage from './storage';
 import { getProfile } from './api';
+import { getSubscriptionInfo, MEMBERSHIP_KEYS } from '../utils/subscriptionInfo';
+import { extractUserData } from '../utils/extractUserData';
+import { IS_PLAY_STORE_BUILD } from '../utils/distribution';
 
 const USAGE_KEY = '@policybhandar_download_usage_v1';
 const USER_KEY = '@policybhandar_user';
@@ -31,120 +34,28 @@ const toLimit = (...values) => {
 const getUserKey = (user = {}) =>
   cleanText(user._id || user.id || user.userId || user.mobile || user.phone || user.email || 'guest');
 
-const getPlan = (user = {}) =>
-  user.subscription ||
-  user.activeSubscription ||
-  user.currentPlan ||
-  (user.activePlan && typeof user.activePlan === 'object' ? user.activePlan : null) ||
-  user.plan ||
-  user.membership ||
-  {};
-
-const isAllFreePlan = (user = {}) => {
-  const allFreePlanId = '6a6742abf3b8e2a894a538af';
-  const plan = getPlan(user);
-  const text = [
-    plan._id,
-    plan.id,
-    plan.name,
-    plan.planName,
-    plan.type,
-    plan.segment,
-    plan.code,
-    plan.slug,
-    typeof user.activePlan === 'string' ? user.activePlan : '',
-    user.subscriptionType,
-    user.planName,
-    user.role,
-    user.accessRole,
-  ]
-    .filter((value) => typeof value !== 'object')
-    .join(' ')
-    .toLowerCase()
-    .replace(/[\s_-]+/g, '');
-  const listText = [
-    user.roles,
-    user.permissions,
-    user.allowedPlans,
-    user.assignedPlans,
-  ]
-    .flatMap((value) => Array.isArray(value) ? value : [])
-    .map((value) => typeof value === 'string' ? value : pickFirst(value?.name, value?.planName, value?.role, value?.code))
-    .join(' ')
-    .toLowerCase()
-    .replace(/[\s_-]+/g, '');
-
-  return text.includes('allfree') || listText.includes('allfree') || text.includes(allFreePlanId.toLowerCase());
+const getPlan = (user = {}) => {
+  const record = [user.subscription, user.activeSubscription, user.currentPlan, user.activePlan, user.plan, user.membership]
+    .find(value => value && typeof value === 'object' && Object.keys(value).length) || {};
+  const metadata = [record.plan, record.planId, user.planId].find(value => value && typeof value === 'object') || {};
+  return { ...metadata, ...record };
 };
+const isAllFreePlan = (user = {}) => getSubscriptionInfo(user).isAllFree;
 
-const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
-
-const extractUserData = (payload) => {
-  if (!isObject(payload)) return null;
-  const direct = [
-    payload.user,
-    payload.profile,
-    payload.advisor,
-    payload.employee,
-    payload.customer,
-    payload.member,
-    payload.account,
-  ].find(isObject);
-  if (direct) return extractUserData(direct) || direct;
-  if (isObject(payload.success)) return extractUserData(payload.success) || payload.success;
-  if (isObject(payload.data)) return extractUserData(payload.data) || payload.data;
-  if (
-    payload.name ||
-    payload.fullName ||
-    payload.full_name ||
-    payload.mobile ||
-    payload.email ||
-    payload.designation ||
-    payload.activePlan ||
-    payload.subscription ||
-    payload.currentPlan
-  ) {
-    return payload;
+const mergeUserData = (previous = {}, next = {}) => {
+  const merged = { ...previous, ...next };
+  if (MEMBERSHIP_KEYS.some(key => Object.prototype.hasOwnProperty.call(next, key))) {
+    MEMBERSHIP_KEYS.forEach(key => { delete merged[key]; });
+    MEMBERSHIP_KEYS.forEach(key => { if (Object.prototype.hasOwnProperty.call(next, key)) merged[key] = next[key]; });
   }
-  return null;
+  return merged;
 };
 
-const mergeUserData = (previous = {}, next = {}) => ({ ...previous, ...next });
-
-const hasAssignedPlan = (user = {}) => Boolean(
-  (typeof user.activePlan === 'string' && user.activePlan.trim()) ||
-    (user.activePlan && typeof user.activePlan === 'object' && (user.activePlan._id || user.activePlan.id || user.activePlan.name)) ||
-    (typeof user.planId === 'string' && user.planId.trim()) ||
-    (typeof user.subscriptionId === 'string' && user.subscriptionId.trim())
-);
-
-export const hasActivePlan = (user = {}) => {
-  const plan = getPlan(user);
-  const status = cleanText(
-    pickFirst(plan.status, user.subscriptionStatus, user.planStatus, user.paymentStatus),
-  ).toLowerCase();
-  const validTill = pickFirst(plan.validTill, plan.expiryDate, user.expiryDate, user.subscriptionEndDate);
-  const expiresAt = validTill ? Date.parse(validTill) : 0;
-  const dateStillValid = Number.isFinite(expiresAt) && expiresAt >= Date.now();
-  const statusBlocksAccess = ['expired', 'inactive', 'cancelled', 'canceled', 'failed'].includes(status);
-  const expiryBlocksAccess = Boolean(validTill && !dateStillValid);
-
-  return Boolean(
-    isAllFreePlan(user) ||
-      user.hasActivePlan ||
-      user.isSubscribed ||
-      plan.active ||
-      plan.isActiveSubscription ||
-      status === 'active' ||
-      status === 'paid' ||
-      dateStillValid ||
-      (hasAssignedPlan(user) && !statusBlocksAccess && !expiryBlocksAccess)
-  );
-};
+export const hasActivePlan = (user = {}) => getSubscriptionInfo(user).active;
 
 export const getDownloadAllowance = (user = {}) => {
   const plan = getPlan(user);
-  if (isAllFreePlan(user)) {
+  if (hasActivePlan(user) && isAllFreePlan(user)) {
     return {
       mode: 'unlimited',
       limit: Infinity,
@@ -172,7 +83,7 @@ export const getDownloadAllowance = (user = {}) => {
   return {
     mode: 'locked',
     limit: 0,
-    label: 'Activate a plan to download',
+    label: IS_PLAY_STORE_BUILD ? 'Not included in your membership' : 'Activate a plan to download',
   };
 };
 
@@ -228,7 +139,7 @@ export const assertCanDownload = async (user = {}) => {
   }
 
   if (allowance.mode === 'locked') {
-    throw new Error('Please activate a membership plan to download or share this content.');
+    throw new Error(IS_PLAY_STORE_BUILD ? 'Your account does not have access to this content. Refresh your membership status and try again.' : 'Please activate a membership plan to download or share this content.');
   }
   if (allowance.mode === 'unlimited') {
     return { allowance, usage: await getDownloadUsage(quotaUser), remaining: Infinity, user: quotaUser };
@@ -238,7 +149,7 @@ export const assertCanDownload = async (user = {}) => {
   const remaining = allowance.limit - used;
 
   if (remaining <= 0) {
-    const message = `Your plan allows ${allowance.limit} downloads per day. Please try again tomorrow or upgrade your plan.`;
+    const message = IS_PLAY_STORE_BUILD ? `Your membership allows ${allowance.limit} downloads per day. Please try again tomorrow.` : `Your plan allows ${allowance.limit} downloads per day. Please try again tomorrow or upgrade your plan.`;
     throw new Error(message);
   }
 

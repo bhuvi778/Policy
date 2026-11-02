@@ -23,6 +23,8 @@ import { Colors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
 import { BRAND, getSubscriptionInfo } from '../services/appData';
 import { getCheckoutDetails } from '../services/paymentCheckout';
+import { IS_PLAY_STORE_BUILD } from '../utils/distribution';
+import MembershipStatusScreen from './MembershipStatusScreen';
 import { getUserProfileRole, normalizeProfileRole } from '../services/contentMapper';
 import {
   createPaymentOrder,
@@ -1428,4 +1430,5 @@ const styles = StyleSheet.create({
   secondaryBtnText: { color: Colors.textGray, fontSize: 13, fontWeight: '700' },
 });
 
-export default SubscriptionPlansScreen;
+const SubscriptionScreen = (props) => IS_PLAY_STORE_BUILD ? <MembershipStatusScreen {...props} /> : <SubscriptionPlansScreen {...props} />;
+export default SubscriptionScreen;
