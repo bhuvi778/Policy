@@ -10,6 +10,7 @@ import { useAuth } from '../context/AuthContext';
 import { BRAND, getAdvisorDisplayName, isDisplayName } from '../services/appData';
 import { getProfileImageUrl } from './ProfileFooterPreview';
 import { APP_VERSION, IS_PLAY_STORE_BUILD } from '../utils/distribution';
+import { SHOW_PLAN_ENTRY_POINTS } from '../utils/platform';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const DRAWER_WIDTH = SCREEN_WIDTH * 0.75;
@@ -25,7 +26,7 @@ const NAV_ITEMS = [
   { id: 'terms', icon: 'description', label: 'Terms Of Use' },
   { id: 'privacy', icon: 'info-outline', label: 'Privacy & Policy' },
   { id: 'exit', icon: 'logout', label: 'Logout' },
-];
+].filter((item) => SHOW_PLAN_ENTRY_POINTS || item.id !== 'subscription');
 
 const DrawerSidebar = ({ visible, onClose, activeItem = 'home', onNavigate, onLogout, userData }) => {
   const insets = useSafeAreaInsets();

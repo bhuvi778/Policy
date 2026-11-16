@@ -12,6 +12,7 @@ import { isDocumentItem, isMediaItem } from '../utils/material';
 import RecipientSheet from '../components/RecipientSheet';
 import { downloadTemplateToDevice } from '../services/downloads';
 import { useAuth } from '../context/AuthContext';
+import { SHOW_PLAN_ENTRY_POINTS } from '../utils/platform';
 
 const POPULAR_SEARCHES = [
   'Life Insurance', 'Birthday Card', 'Daily Motivation',
@@ -34,7 +35,7 @@ const APP_RESULTS = [
   { id: 'contact', title: 'Contact Us', section: 'Company', route: 'ContactUs', icon: 'support-agent' },
   { id: 'terms', title: 'Term of Use', section: 'Company', route: 'Terms', icon: 'description' },
   { id: 'privacy', title: 'Privacy Policy', section: 'Company', route: 'Privacy', icon: 'privacy-tip' },
-];
+].filter((item) => SHOW_PLAN_ENTRY_POINTS || item.route !== 'Subscription');
 
 const matches = (item, query) => {
   const q = query.toLowerCase();

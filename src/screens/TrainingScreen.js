@@ -18,6 +18,7 @@ import { useAuth } from '../context/AuthContext';
 import { getSubscriptionInfo } from '../services/appData';
 import { getPlans } from '../services/api';
 import { loadTrainingCategories, loadTrainingVideos } from '../services/trainingData';
+import { SHOW_PLAN_ENTRY_POINTS } from '../utils/platform';
 
 const unwrapList = (payload) => {
   if (Array.isArray(payload)) return payload;
@@ -214,7 +215,7 @@ const TrainingScreen = ({ navigation }) => {
               {plansFailed ? 'Access check failed. Pull down to retry.' : !plansReady ? 'Checking plan access...' : locked ? 'Locked by current plan' : `${categoryTrainings.length || 0} video${categoryTrainings.length === 1 ? '' : 's'}`}
             </Text>
           </View>
-          {locked ? (
+          {locked && SHOW_PLAN_ENTRY_POINTS ? (
             <TouchableOpacity
               style={[styles.actionBtn, styles.actionBtnLocked]}
               onPress={() => navigation.navigate('Subscription')}

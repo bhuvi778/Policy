@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
 import { changePassword, deleteAccount } from '../services/api';
+import { SHOW_PLAN_ENTRY_POINTS } from '../utils/platform';
 import {
   BRAND,
   getAdvisorDisplayName,
@@ -241,11 +242,11 @@ const MyProfileScreen = ({ navigation }) => {
     if (deleteRequestLoading) return;
     Alert.alert(
       'Delete My Account',
-      'This will permanently delete your account. This cannot be undone.',
+      'This will permanently delete your account and profile. This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete Account',
+          text: 'Delete',
           style: 'destructive',
           onPress: async () => {
             setDeleteRequestLoading(true);
@@ -258,8 +259,11 @@ const MyProfileScreen = ({ navigation }) => {
             }
             await logout();
             setDeleteRequestLoading(false);
-            navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
-            Alert.alert('Account deleted', 'Your account deletion was confirmed by the server.');
+            navigation.reset({
+              index: 0,
+              routes: [{ name: 'Login' }],
+            });
+            Alert.alert('Account deleted', 'Your account and profile have been permanently deleted.');
           },
         },
       ],
@@ -498,9 +502,11 @@ const MyProfileScreen = ({ navigation }) => {
           {!subscription.active ? (
             <Text style={styles.membershipNote}>No active subscription is linked to this account yet.</Text>
           ) : null}
-          <TouchableOpacity style={styles.renewBtn} onPress={() => navigation.navigate('Subscription')}>
-            <Text style={styles.renewText}>{subscription.active ? 'Manage Plan' : 'Choose Plan'}</Text>
-          </TouchableOpacity>
+          {SHOW_PLAN_ENTRY_POINTS ? (
+            <TouchableOpacity style={styles.renewBtn} onPress={() => navigation.navigate('Subscription')}>
+              <Text style={styles.renewText}>{subscription.active ? 'Manage Plan' : 'Choose Plan'}</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         <TouchableOpacity

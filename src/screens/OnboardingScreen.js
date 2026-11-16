@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Dimensions,
-  FlatList, Animated, StatusBar, PermissionsAndroid,
+  FlatList, Animated, StatusBar, PermissionsAndroid, Platform,
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { Colors } from '../theme/colors';
@@ -50,7 +50,8 @@ const SLIDES = [
   },
 ];
 
-const PERMISSION_SCREENS = [
+// Storage permission only exists on Android; iOS needs no pre-permission screen.
+const PERMISSION_SCREENS = Platform.OS !== 'android' ? [] : [
   {
     id: 'storage',
     title: 'Storage Permission:',
@@ -111,11 +112,21 @@ const OnboardingScreen = ({ navigation }) => {
       flatListRef.current?.scrollToIndex({ index: next, animated: true });
     } else {
       // Done with slides → permissions
-      setPhase('permissions');
+      goToPermissions();
     }
   };
 
-  const skipAll = () => setPhase('permissions');
+  const finishOnboarding = async () => {
+    await markOnboardingDone?.();
+    navigation.replace('Home');
+  };
+
+  const goToPermissions = () => {
+    if (PERMISSION_SCREENS.length) setPhase('permissions');
+    else finishOnboarding();
+  };
+
+  const skipAll = () => goToPermissions();
 
   const handlePermAgree = async (item) => {
     try {
@@ -125,8 +136,7 @@ const OnboardingScreen = ({ navigation }) => {
       setPermIndex(permIndex + 1);
     } else {
       // All done → mark onboarding complete → Home
-      await markOnboardingDone?.();
-      navigation.replace('Home');
+      await finishOnboarding();
     }
   };
 
