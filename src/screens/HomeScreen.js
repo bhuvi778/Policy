@@ -1147,27 +1147,29 @@ const HomeScreen = ({ navigation }) => {
               </TouchableOpacity>
             </View>
 
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.roleChipRow}
-              style={styles.roleChipScroller}
-            >
+            <View style={styles.roleChipRow}>
               {scopeTabs.slice(0, 3).map((tab) => {
                   const active = selectedScopeTabInfo?.id === tab.id;
                   return (
                     <TouchableOpacity
                       key={tab.id}
-                      style={[styles.roleChip, String(tab.id || '').startsWith('shared:') && styles.roleChipWide, active && styles.roleChipActive]}
+                      style={[styles.roleChip, active && styles.roleChipActive]}
                       onPress={() => handleScopeTabPress(tab)}
                       activeOpacity={0.82}
                     >
                       <MaterialIcons name={tab.icon} size={18} color={active ? '#fff' : Colors.primary} />
-                      <Text style={[styles.roleChipText, active && styles.roleChipTextActive]} numberOfLines={1}>{tab.label}</Text>
+                      <Text
+                        style={[styles.roleChipText, active && styles.roleChipTextActive]}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.75}
+                      >
+                        {tab.label}
+                      </Text>
                     </TouchableOpacity>
                   );
                 })}
-            </ScrollView>
+            </View>
 
             <ScrollView style={styles.scopeList} showsVerticalScrollIndicator={false}>
               {servicesLoading && !serviceTree.length ? (
@@ -1446,14 +1448,12 @@ const styles = StyleSheet.create({
   scopeCloseBtnDisabled: {
     opacity: 0.65,
   },
-  roleChipScroller: {
-    maxHeight: 54,
-    marginTop: 12,
-  },
+  // The chips share the row instead of scrolling so all three stay visible on narrow
+  // windows (375pt iPhone SE / iPhone apps on iPad); labels shrink rather than clip.
   roleChipRow: {
     flexDirection: 'row',
     gap: 8,
-    paddingRight: 4,
+    marginTop: 12,
   },
   roleChip: {
     alignItems: 'center',
@@ -1461,14 +1461,12 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     borderWidth: 1,
     flexDirection: 'row',
-    gap: 7,
+    flexGrow: 1,
+    flexShrink: 1,
+    gap: 6,
     height: 38,
     justifyContent: 'center',
-    paddingHorizontal: 10,
-    width: 100,
-  },
-  roleChipWide: {
-    width: 158,
+    paddingHorizontal: 8,
   },
   roleChipActive: {
     backgroundColor: Colors.primary,
@@ -1476,6 +1474,7 @@ const styles = StyleSheet.create({
   },
   roleChipText: {
     color: Colors.primary,
+    flexShrink: 1,
     fontSize: 12,
     fontWeight: '800',
   },

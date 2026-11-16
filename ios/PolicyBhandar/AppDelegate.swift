@@ -34,6 +34,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 }
 
 class ReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {
+  override func createRootViewController() -> UIViewController {
+    WindowControlsSafeAreaViewController()
+  }
+
   override func sourceURL(for bridge: RCTBridge) -> URL? {
     self.bundleURL()
   }
@@ -44,5 +48,31 @@ class ReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {
 #else
     Bundle.main.url(forResource: "main", withExtension: "jsbundle")
 #endif
+  }
+}
+
+/// On iPadOS 26+ the iPhone app runs in a window whose close/minimise controls sit in the
+/// top-leading corner, and the plain safe area doesn't always clear them. Push the safe area
+/// down by the difference so every screen's `useSafeAreaInsets().top` header clears the
+/// controls (App Review Guideline 4: "top menu bar cutoff" on iPad).
+class WindowControlsSafeAreaViewController: UIViewController {
+  override func viewDidLayoutSubviews() {
+    super.viewDidLayoutSubviews()
+    updateWindowControlsInset()
+  }
+
+  override func viewSafeAreaInsetsDidChange() {
+    super.viewSafeAreaInsetsDidChange()
+    updateWindowControlsInset()
+  }
+
+  private func updateWindowControlsInset() {
+    guard #available(iOS 26.0, *), let window = view.window else { return }
+    // Measured on the window, which additionalSafeAreaInsets never affects, so this can't feed back.
+    let controlsTop = window.edgeInsets(for: .safeArea(cornerAdaptation: .vertical)).top
+    let extraTop = max(0, controlsTop - window.safeAreaInsets.top).rounded(.up)
+    if additionalSafeAreaInsets.top != extraTop {
+      additionalSafeAreaInsets.top = extraTop
+    }
   }
 }
